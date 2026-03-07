@@ -110,4 +110,4 @@ class XrayStatsService:
 
 
 # Глобальный экземпляр
-stats_service = StatsService()
+stats_service = XrayStatsService()
