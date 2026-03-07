@@ -11,6 +11,11 @@ from html import escape
 from aiogram.types import CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 import config
+from services.stats import XrayStatsService
+from datetime import datetime, timezone
+
+# Инициализация сервиса статистики
+stats_service = XrayStatsService()
 
 router = Router()
 
@@ -419,6 +424,58 @@ async def cb_cancel_payment(callback: CallbackQuery, state: FSMContext):
         reply_markup=inline.back_to_menu_keyboard()
     )
     await callback.answer()
+
+
+@router.message(Command("my_stats"))
+async def cmd_my_stats(message: types.Message):
+    """Личная статистика пользователя"""
+    user_id = message.from_user.id
+
+    db: Session = get_db_session()
+    try:
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if not client:
+            await message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            return
+
+        # Определяем статус онлайн
+        is_online = stats_service.is_client_online(client.last_seen)
+
+        # Обновляем last_seen при запросе
+        client.last_seen = datetime.now(timezone.utc)
+        client.is_online = is_online
+        db.commit()
+
+        # Срок подписки
+        if client.subscription_end:
+            days_left = (client.subscription_end - datetime.now(timezone.utc)).days
+            if days_left > 0:
+                subscription_text = f"✅ Активна ({days_left} дн. осталось)"
+            else:
+                subscription_text = "❌ Истекла"
+        else:
+            subscription_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+
+        text = (
+            f"📊 <b>Ваша статистика</b>\n\n"
+            f"<b>Статус подписки:</b> {subscription_text}\n"
+            f"<b>Статус подключения:</b> {'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n"
+            f"<b>Последняя активность:</b> {client.last_seen.strftime('%d.%m.%Y %H:%M') if client.last_seen else 'Никогда'}\n\n"
+            f"<b>📈 Трафик:</b>\n"
+            f"  • ⬆️ Загружено: {stats_service.format_bytes(client.traffic_upload or 0)}\n"
+            f"  • ⬇️ Скачано: {stats_service.format_bytes(client.traffic_download or 0)}\n"
+            f"  • 🔄 Всего: {stats_service.format_bytes((client.traffic_upload or 0) + (client.traffic_download or 0))}\n\n"
+            f"<b>🔗 Подключений:</b> {client.connection_count or 0}\n\n"
+            f"<i>Статистика обновляется каждые 5 минут</i>"
+        )
+
+        await message.answer(text)
+
+    finally:
+        db.close()
 
 
 @router.callback_query(F.data.startswith("copy_vpn:"))
