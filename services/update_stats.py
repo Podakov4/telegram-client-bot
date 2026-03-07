@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Скрипт для обновления статистики из Xray API (gRPC)
+Скрипт для обновления статистики из Xray API (gRPC/HTTP)
 Запускается каждые 5 минут через cron
 """
 
@@ -14,11 +14,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 from database import get_db_session, Client
-from services.stats import StatsService
+from services.stats import XrayStatsService  # ← Исправлено!
 from sqlalchemy import func
 
 # Инициализация сервиса статистики
-stats_service = StatsService()
+stats_service = XrayStatsService()  # ← Исправлено!
 
 
 def get_clients_from_xray() -> list:
@@ -55,6 +55,7 @@ def update_database():
 
         if not xray_clients:
             print("⚠️ Не найдено клиентов в Xray API")
+            print("💡 Подключитесь к VPN чтобы появилась статистика")
             return
 
         print(f"📊 Найдено клиентов в Xray: {len(xray_clients)}")
@@ -75,6 +76,12 @@ def update_database():
                 if client:
                     print(f"   ✅ Найден по ID: {client_id} → {client.full_name}")
 
+            if not client:
+                # Пробуем найти по имени
+                client = db.query(Client).filter(
+                    func.lower(Client.full_name).contains(email.lower())
+                ).first()
+
             if client:
                 # Получаем трафик из Xray API
                 traffic = get_client_traffic(email)
@@ -87,8 +94,8 @@ def update_database():
                 if client.connection_count is None:
                     client.connection_count = 0
 
-                # Обновляем статистику (накапливаем)
-                # Важно: Xray возвращает общие значения, а не прирост
+                # Обновляем статистику
+                # Xray возвращает общие значения (накопленные с момента запуска)
                 # Поэтому берём максимальное значение
                 client.traffic_upload = max(client.traffic_upload, traffic.get('upload', 0))
                 client.traffic_download = max(client.traffic_download, traffic.get('download', 0))
@@ -123,9 +130,13 @@ def main():
     print(f"⏰ Время: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
 
     # Проверяем подключение к API
-    if not stats_service.connect():
+    print("🔍 Проверка подключения к Xray API...")
+    if not stats_service.test_connection():  # ← Исправлено!
         print("❌ Не удалось подключиться к Xray API")
-        print("💡 Проверьте что Xray запущен и API порт 10085 открыт")
+        print("💡 Проверьте что:")
+        print("   • Xray запущен (sudo systemctl status xray)")
+        print("   • API порт 10085 открыт (sudo ss -tlnp | grep 10085)")
+        print("   • В конфиге Xray есть секция api")
         return
 
     print("✅ Подключение к Xray API успешно!")
