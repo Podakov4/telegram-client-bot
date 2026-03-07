@@ -13,6 +13,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import config
 from services.stats import XrayStatsService
 from datetime import datetime, timezone
+from services.stats import XrayStatsService
+from datetime import datetime, timezone
 
 # Инициализация сервиса статистики
 stats_service = XrayStatsService()
@@ -356,7 +358,7 @@ async def cb_get_vpn(callback: CallbackQuery):
 
 @router.callback_query(F.data == "profile")
 async def cb_profile(callback: CallbackQuery):
-    """Показать профиль"""
+    """Показать профиль с кнопками"""
     user_id = callback.from_user.id
 
     db: Session = get_db_session()
@@ -369,6 +371,9 @@ async def cb_profile(callback: CallbackQuery):
             await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
             return
 
+        # Проверяем админ ли
+        is_admin = user_id in config.ADMIN_IDS
+
         status = "✅ Активна" if client.is_active else "❌ Не оплачена"
 
         text = (
@@ -377,12 +382,14 @@ async def cb_profile(callback: CallbackQuery):
             f"<b>Имя:</b> {escape(client.full_name or 'Не указано')}\n"
             f"<b>Telegram:</b> @{escape(client.username or 'не указан')}</b>\n"
             f"<b>Статус подписки:</b> {status}\n"
-            f"<b>Дата регистрации:</b> {client.created_at.strftime('%d.%m.%Y %H:%M')}"
+            f"<b>Дата регистрации:</b> {client.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"Выберите действие:"
         )
 
-        await callback.message.answer(
+        await callback.message.edit_text(
             text,
-            reply_markup=inline.back_to_menu_keyboard()
+            reply_markup=inline.profile_menu_keyboard(is_admin),
+            parse_mode="HTML"
         )
 
     finally:
@@ -390,6 +397,109 @@ async def cb_profile(callback: CallbackQuery):
 
     await callback.answer()
 
+
+@router.callback_query(F.data == "my_stats")
+async def cb_my_stats(callback: CallbackQuery):
+    """Личная статистика пользователя"""
+    user_id = callback.from_user.id
+
+    db: Session = get_db_session()
+    try:
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if not client:
+            await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            return
+
+        # Определяем статус онлайн
+        is_online = stats_service.is_client_online(client.last_seen)
+
+        # Обновляем last_seen при запросе
+        client.last_seen = datetime.now(timezone.utc)
+        client.is_online = is_online
+        db.commit()
+
+        # Срок подписки
+        if client.subscription_end:
+            days_left = (client.subscription_end - datetime.now(timezone.utc)).days
+            if days_left > 0:
+                subscription_text = f"✅ Активна ({days_left} дн. осталось)"
+            else:
+                subscription_text = "❌ Истекла"
+        else:
+            subscription_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+
+        text = (
+            f"📊 <b>Ваша статистика</b>\n\n"
+            f"<b>Статус подписки:</b> {subscription_text}\n"
+            f"<b>Статус подключения:</b> {'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n"
+            f"<b>Последняя активность:</b> {client.last_seen.strftime('%d.%m.%Y %H:%M') if client.last_seen else 'Никогда'}\n\n"
+            f"<b>📈 Трафик:</b>\n"
+            f"  • ⬆️ Загружено: {stats_service.format_bytes(client.traffic_upload or 0)}\n"
+            f"  • ⬇️ Скачано: {stats_service.format_bytes(client.traffic_download or 0)}\n"
+            f"  • 🔄 Всего: {stats_service.format_bytes((client.traffic_upload or 0) + (client.traffic_download or 0))}\n\n"
+            f"<b>🔗 Подключений:</b> {client.connection_count or 0}\n\n"
+            f"<i>Статистика обновляется каждые 5 минут</i>"
+        )
+
+        await callback.message.answer(
+            text,
+            reply_markup=inline.back_to_menu_keyboard(),
+            parse_mode="HTML"
+        )
+
+    finally:
+        db.close()
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "server_stats")
+async def cb_server_stats(callback: CallbackQuery):
+    """Статистика сервера (только админ)"""
+    user_id = callback.from_user.id
+
+    if user_id not in config.ADMIN_IDS:
+        await callback.message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    db: Session = get_db_session()
+    try:
+        total = db.query(Client).count()
+        active = db.query(Client).filter(Client.is_active == True).count()
+        online = db.query(Client).filter(Client.is_online == True).count()
+        with_vpn = db.query(Client).filter(Client.wireguard_config != None).count()
+
+        # Общая статистика трафика
+        from sqlalchemy import func
+        total_upload = db.query(func.sum(Client.traffic_upload)).scalar() or 0
+        total_download = db.query(func.sum(Client.traffic_download)).scalar() or 0
+
+        text = (
+            f"📊 <b>Статистика сервера</b>\n\n"
+            f"<b>👥 Клиенты:</b>\n"
+            f"  • Всего: {total}\n"
+            f"  • Активных (оплатили): {active}\n"
+            f"  • Онлайн сейчас: {online}\n"
+            f"  • С VPN: {with_vpn}\n\n"
+            f"<b>📈 Трафик:</b>\n"
+            f"  • ⬆️ Загружено: {stats_service.format_bytes(total_upload)}\n"
+            f"  • ⬇️ Скачано: {stats_service.format_bytes(total_download)}\n"
+            f"  • 🔄 Всего: {stats_service.format_bytes(total_upload + total_download)}"
+        )
+
+        await callback.message.answer(
+            text,
+            reply_markup=inline.admin_stats_keyboard(),
+            parse_mode="HTML"
+        )
+
+    finally:
+        db.close()
+
+    await callback.answer()
 
 @router.callback_query(F.data == "help")
 async def cb_help(callback: CallbackQuery):

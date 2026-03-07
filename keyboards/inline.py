@@ -1,4 +1,3 @@
-# keyboards/inline.py
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -18,7 +17,7 @@ def payment_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="💳 Оплатить 300₽/мес", callback_data="pay_300")
     builder.button(text="💳 Оплатить 800₽/3 мес", callback_data="pay_800")
     builder.button(text="💳 Оплатить 3000₽/год", callback_data="pay_3000")
-    builder.button(text="❌ Отмена", callback_data="main_menu")
+    builder.button(text="❌ Отмена", callback_data="cancel_payment")
     builder.adjust(1, 1, 1, 1)
     return builder.as_markup()
 
@@ -26,6 +25,14 @@ def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     """Кнопка назад в меню"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
+    return builder.as_markup()
+
+def vpn_link_keyboard(vpn_link: str) -> InlineKeyboardMarkup:
+    """Кнопка для копирования VPN ссылки"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Копировать VPN ссылку", callback_data=f"copy_vpn:{vpn_link}")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
+    builder.adjust(1, 1)
     return builder.as_markup()
 
 def vpn_ready_keyboard() -> InlineKeyboardMarkup:
@@ -36,10 +43,22 @@ def vpn_ready_keyboard() -> InlineKeyboardMarkup:
     builder.adjust(1, 1)
     return builder.as_markup()
 
-def vpn_link_keyboard() -> InlineKeyboardMarkup:
-    """Кнопка для просмотра VPN ссылки"""
+def profile_menu_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
+    """Меню профиля с кнопками статистики"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="📋 Копировать VPN ссылку", callback_data="copy_vpn")
-    builder.button(text="🏠 Главное меню", callback_data="main_menu")
-    builder.adjust(1, 1)
+    builder.button(text="📊 Моя статистика", callback_data="my_stats")
+    if is_admin:
+        builder.button(text="📈 Статистика сервера", callback_data="server_stats")
+    builder.button(text="🏠 Назад", callback_data="main_menu")
+    builder.adjust(1, 1, 1)
+    return builder.as_markup()
+
+def admin_stats_keyboard() -> InlineKeyboardMarkup:
+    """Админская статистика"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📊 Статистика сервера", callback_data="server_stats")
+    builder.button(text="👥 Все клиенты", callback_data="admin_clients")
+    builder.button(text="🏆 Топ по трафику", callback_data="top_traffic")
+    builder.button(text="🏠 Назад", callback_data="main_menu")
+    builder.adjust(1, 1, 1, 1)
     return builder.as_markup()

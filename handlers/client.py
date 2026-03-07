@@ -1,9 +1,11 @@
 # handlers/client.py
 from aiogram import types, Router, F
 from aiogram.filters import Command
+from aiogram.types import CallbackQuery
 from sqlalchemy.orm import Session
 from database import get_db_session, Client
 from html import escape
+from keyboards import inline
 import config
 from services.stats import XrayStatsService
 from datetime import datetime, timezone
@@ -236,3 +238,97 @@ async def cmd_top_traffic(message: types.Message):
 
     finally:
         db.close()
+
+
+@router.callback_query(F.data == "admin_clients")
+async def cb_admin_clients(callback: CallbackQuery):
+    """Все клиенты (кнопка)"""
+    user_id = callback.from_user.id
+
+    if user_id not in config.ADMIN_IDS:
+        await callback.message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    db: Session = get_db_session()
+    try:
+        clients = db.query(Client).all()
+
+        if not clients:
+            await callback.message.answer("📭 Клиентов пока нет.")
+            return
+
+        active_count = sum(1 for c in clients if c.is_active)
+
+        text = f"📋 <b>Всего клиентов: {len(clients)}</b>\n"
+        text += f"<b>Активных:</b> {active_count}\n\n"
+
+        for client in clients[:20]:
+            status = "✅" if client.is_active else "❌"
+            vpn = "🔗" if client.wireguard_config else ""
+
+            text += (
+                f"{status} <b>#{client.id}</b> {escape(client.full_name or 'Без имени')}\n"
+                f"📱 {escape(client.phone) or '—'}\n"
+                f"🆔 <code>{client.telegram_id}</code>\n"
+                f"{vpn}\n\n"
+            )
+
+        if len(clients) > 20:
+            text += f"... и ещё {len(clients) - 20} клиентов"
+
+        await callback.message.answer(
+            text,
+            reply_markup=inline.back_to_menu_keyboard(),
+            parse_mode="HTML"
+        )
+
+    finally:
+        db.close()
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "top_traffic")
+async def cb_top_traffic_btn(callback: CallbackQuery):
+    """Топ по трафику (кнопка)"""
+    user_id = callback.from_user.id
+
+    if user_id not in config.ADMIN_IDS:
+        await callback.message.answer("❌ У вас нет доступа к этой команде.")
+        return
+
+    db: Session = get_db_session()
+    try:
+        from sqlalchemy import func
+
+        clients = db.query(Client).filter(
+            Client.is_active == True,
+            Client.wireguard_config != None
+        ).order_by(
+            (Client.traffic_upload + Client.traffic_download).desc()
+        ).limit(10).all()
+
+        if not clients:
+            await callback.message.answer("📭 Нет данных о трафике")
+            return
+
+        text = f"🏆 <b>Топ-10 по трафику</b>\n\n"
+        for i, client in enumerate(clients, 1):
+            total = (client.traffic_upload or 0) + (client.traffic_download or 0)
+            text += (
+                f"<b>{i}. {escape(client.full_name or f'Клиент #{client.id}')}</b>\n"
+                f"   📊 {stats_service.format_bytes(total)}\n"
+                f"   ⬆️ {stats_service.format_bytes(client.traffic_upload or 0)} | "
+                f"⬇️ {stats_service.format_bytes(client.traffic_download or 0)}\n\n"
+            )
+
+        await callback.message.answer(
+            text,
+            reply_markup=inline.back_to_menu_keyboard(),
+            parse_mode="HTML"
+        )
+
+    finally:
+        db.close()
+
+    await callback.answer()
