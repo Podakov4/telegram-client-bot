@@ -4,11 +4,32 @@
 Запускается каждые 5 минут через cron
 """
 
+import sys
+import os
 import subprocess
 import re
 from datetime import datetime
-from database import get_db_session, Client
-from sqlalchemy import func
+
+# 🔥 ВАЖНО: Добавляем корневую папку проекта в путь
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
+print(f"📁 BASE_DIR: {BASE_DIR}")
+print(f"📁 Current dir: {os.getcwd()}")
+print(f"📁 Python path: {sys.path[:3]}")
+
+# Теперь импортируем
+try:
+    from database import get_db_session, Client
+    from sqlalchemy import func
+
+    print("✅ Импорты успешны!")
+except ImportError as e:
+    print(f"❌ Ошибка импорта: {e}")
+    print(f"📂 Проверяем файлы в {BASE_DIR}/database/")
+    if os.path.exists(os.path.join(BASE_DIR, 'database')):
+        print(f"   Files: {os.listdir(os.path.join(BASE_DIR, 'database'))}")
+    sys.exit(1)
 
 
 def get_xray_logs():
