@@ -218,11 +218,11 @@ async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
         # Активируем клиента
         client.is_active = True
 
-        # Генерация VLESS ссылки
+        # 🔥 Генерация VLESS ссылки и добавление в Xray
         client_uuid, vless_link = vless_manager.add_client_to_xray(
-            db_session=db,
             client_id=client.id,
-            full_name=client.full_name or f"User_{user_id}"
+            full_name=client.full_name or f"User_{user_id}",
+            email=f"client_{client.id}_{client.username or user_id}"
         )
 
         # Сохранение VLESS конфигурации
@@ -254,7 +254,8 @@ async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
                     f"💰 <b>Новая оплата!</b>\n\n"
                     f"<b>Клиент:</b> {escape(client.full_name or 'Не указано')}\n"
                     f"<b>ID:</b> <code>{client.id}</code>\n"
-                    f"<b>Telegram:</b> @{escape(client.username or 'не указан')}"
+                    f"<b>Telegram:</b> @{escape(client.username or 'не указан')}\n"
+                    f"<b>UUID:</b> <code>{client_uuid}</code>"
                 )
             except:
                 pass
