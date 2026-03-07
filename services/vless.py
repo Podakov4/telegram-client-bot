@@ -2,6 +2,7 @@
 import uuid
 import json
 import subprocess
+import os
 from typing import Tuple
 from urllib.parse import quote
 
@@ -42,10 +43,33 @@ class VLESSManager:
 
     def add_client_to_xray(self, client_id: int, full_name: str,
                            email: str = None) -> Tuple[str, str]:
-        """Добавление клиента в Xray конфиг"""
+        """
+        Добавление клиента в Xray конфиг
+        Возвращает: (uuid, vless_link)
+        """
+        # Генерация UUID
         client_uuid = self.generate_uuid()
+
+        # Email для Xray
         client_email = (email or f"client_{client_id}")[:60].replace(" ", "_").lower()
 
+        # 🔥 ЗАГЛУШКА: Проверяем существует ли конфиг Xray
+        xray_config_exists = os.path.exists(self.XRAY_CONFIG_PATH)
+
+        if not xray_config_exists:
+            print(f"⚠️  Xray конфиг не найден ({self.XRAY_CONFIG_PATH})")
+            print(f"⚠️  Работа в режиме ЗАГЛУШКИ - клиент не добавлен в Xray")
+            print(f"⚠️  UUID: {client_uuid}")
+            # Просто генерируем ссылку без добавления в Xray
+            remark = f"Client_{client_id}_{full_name[:15]}" if full_name else f"Client_{client_id}"
+            vless_link = self.generate_vless_link(
+                user_id=str(client_id),
+                uuid=client_uuid,
+                remark=remark
+            )
+            return client_uuid, vless_link
+
+        # 🔥 ОСНОВНОЙ КОД: Добавление в Xray (только на сервере)
         try:
             with open(self.XRAY_CONFIG_PATH, 'r') as f:
                 config = json.load(f)
@@ -129,31 +153,3 @@ class VLESSManager:
         )
 
         return client_uuid, vless_link
-
-    def remove_client_from_xray(self, email: str) -> bool:
-        """Удаление клиента из Xray конфига"""
-        try:
-            with open(self.XRAY_CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-
-            for inbound in config.get("inbounds", []):
-                if inbound.get("protocol") == "vless":
-                    clients = inbound.get("settings", {}).get("clients", [])
-                    inbound["settings"]["clients"] = [
-                        c for c in clients if c.get("email") != email
-                    ]
-                    break
-
-            with open(self.XRAY_CONFIG_PATH, 'w') as f:
-                json.dump(config, f, indent=2)
-
-            subprocess.run(
-                ["sudo", "systemctl", "restart", "xray"],
-                check=True,
-                capture_output=True
-            )
-
-            return True
-        except Exception as e:
-            print(f"❌ Ошибка удаления клиента: {e}")
-            return False
