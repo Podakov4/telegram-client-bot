@@ -43,33 +43,17 @@ class VLESSManager:
 
     def add_client_to_xray(self, client_id: int, full_name: str,
                            email: str = None) -> Tuple[str, str]:
-        """
-        Добавление клиента в Xray конфиг
-        Возвращает: (uuid, vless_link)
-        """
-        # Генерация UUID
+        """Добавление клиента в Xray конфиг"""
         client_uuid = self.generate_uuid()
-
-        # Email для Xray
         client_email = (email or f"client_{client_id}")[:60].replace(" ", "_").lower()
 
-        # 🔥 ЗАГЛУШКА: Проверяем существует ли конфиг Xray
-        xray_config_exists = os.path.exists(self.XRAY_CONFIG_PATH)
-
-        if not xray_config_exists:
-            print(f"⚠️  Xray конфиг не найден ({self.XRAY_CONFIG_PATH})")
-            print(f"⚠️  Работа в режиме ЗАГЛУШКИ - клиент не добавлен в Xray")
-            print(f"⚠️  UUID: {client_uuid}")
-            # Просто генерируем ссылку без добавления в Xray
+        # Проверка существует ли конфиг Xray
+        if not os.path.exists(self.XRAY_CONFIG_PATH):
+            print(f"⚠️ Xray конфиг не найден: {self.XRAY_CONFIG_PATH}")
+            print(f"⚠️ Работа в режиме заглушки")
             remark = f"Client_{client_id}_{full_name[:15]}" if full_name else f"Client_{client_id}"
-            vless_link = self.generate_vless_link(
-                user_id=str(client_id),
-                uuid=client_uuid,
-                remark=remark
-            )
-            return client_uuid, vless_link
+            return client_uuid, self.generate_vless_link(str(client_id), client_uuid, remark)
 
-        # 🔥 ОСНОВНОЙ КОД: Добавление в Xray (только на сервере)
         try:
             with open(self.XRAY_CONFIG_PATH, 'r') as f:
                 config = json.load(f)
@@ -132,18 +116,27 @@ class VLESSManager:
         with open(self.XRAY_CONFIG_PATH, 'w') as f:
             json.dump(config, f, indent=2)
 
+        # 🔥 Перезапуск Xray: без sudo если root, с абсолютным путём
         try:
-            subprocess.run(
-                ["sudo", "systemctl", "restart", "xray"],
-                check=True,
-                capture_output=True
-            )
+            systemctl_cmd = "/usr/bin/systemctl"
+            if os.geteuid() == 0:
+                # Запущен от root - sudo не нужен
+                subprocess.run(
+                    [systemctl_cmd, "restart", "xray"],
+                    check=True,
+                    capture_output=True
+                )
+            else:
+                # Не от root - нужен sudo
+                subprocess.run(
+                    ["sudo", systemctl_cmd, "restart", "xray"],
+                    check=True,
+                    capture_output=True
+                )
         except subprocess.CalledProcessError as e:
             print(f"⚠️ Ошибка перезапуска Xray: {e}")
-            subprocess.run(
-                ["sudo", "systemctl", "reload", "xray"],
-                capture_output=True
-            )
+        except FileNotFoundError:
+            print(f"⚠️ systemctl не найден, пропускаем перезапуск")
 
         remark = f"Client_{client_id}_{full_name[:15]}" if full_name else f"Client_{client_id}"
         vless_link = self.generate_vless_link(
