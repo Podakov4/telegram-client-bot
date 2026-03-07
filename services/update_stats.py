@@ -1,102 +1,70 @@
 #!/usr/bin/env python3
 """
-Скрипт для обновления статистики из логов Xray
+Скрипт для обновления статистики из Xray API (gRPC)
 Запускается каждые 5 минут через cron
 """
 
 import sys
 import os
-import subprocess
 import re
 from datetime import datetime, timezone
 
-# 🔥 ВАЖНО: Добавляем корневую папку проекта в путь
+# Добавляем корневую папку проекта в путь
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
-print(f"📁 BASE_DIR: {BASE_DIR}")
-print(f"📁 Current dir: {os.getcwd()}")
-print(f"📁 Python path: {sys.path[:3]}")
+from database import get_db_session, Client
+from services.stats import StatsService
+from sqlalchemy import func
 
-# Теперь импортируем
-try:
-    from database import get_db_session, Client
-    from sqlalchemy import func
-
-    print("✅ Импорты успешны!")
-except ImportError as e:
-    print(f"❌ Ошибка импорта: {e}")
-    print(f"📂 Проверяем файлы в {BASE_DIR}/database/")
-    if os.path.exists(os.path.join(BASE_DIR, 'database')):
-        print(f"   Files: {os.listdir(os.path.join(BASE_DIR, 'database'))}")
-    sys.exit(1)
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-def get_xray_logs():
-    """Получить последние логи Xray"""
-    try:
-        # Увеличиваем таймаут до 30 секунд и берём меньше данных
-        result = subprocess.run(
-            ['sudo', 'journalctl', '-u', 'xray', '-n', '1000', '--no-pager'],
-            capture_output=True,
-            text=True,
-            timeout=30  # Увеличили с 10 до 30 секунд
-        )
-        return result.stdout
-    except subprocess.TimeoutExpired:
-        print("⚠️ Таймаут при получении логов (слишком много данных)")
-        # Пробуем получить только последние 100 строк
-        try:
-            result = subprocess.run(
-                ['sudo', 'journalctl', '-u', 'xray', '-n', '100', '--no-pager'],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.stdout
-        except:
-            return ""
-    except Exception as e:
-        print(f"❌ Ошибка получения логов: {e}")
-        return ""
+# Инициализация сервиса статистики
+stats_service = StatsService()
 
 
-def parse_traffic_from_logs(logs: str) -> dict:
-    """
-    Распарсить логи Xray
-    Считаем подключения и последнюю активность
-    """
-    client_data = {}
+def get_clients_from_xray() -> list:
+    """Получить список всех клиентов из Xray API"""
+    all_stats = stats_service.get_all_stats()
 
-    # Паттерн: email: client_X_name
-    pattern = r'email:\s+(\S+)'
+    clients = []
+    if 'stat' in all_stats:
+        for stat in all_stats['stat']:
+            name = stat.get('name', '')
+            # Извлекаем email из имени статистики
+            # Формат: user>>>email>>>traffic>>>uplink/downlink
+            match = re.search(r'user>>>(\S+)>>>traffic', name)
+            if match:
+                email = match.group(1)
+                if email not in clients:
+                    clients.append(email)
 
-    for match in re.finditer(pattern, logs):
-        email = match.group(1).rstrip('_k').rstrip('_Test')  # Убираем суффиксы
-
-        if email not in client_data:
-            client_data[email] = {
-                'connections': 0,
-                'last_seen': datetime.now(timezone.utc)
-            }
-
-        client_data[email]['connections'] += 1
-        client_data[email]['last_seen'] = datetime.now(timezone.utc)
-
-    return client_data
+    return clients
 
 
-def update_database(client_data: dict):
+def get_client_traffic(email: str) -> dict:
+    """Получить трафик для конкретного клиента"""
+    return stats_service.get_client_stats(email)
+
+
+def update_database():
     """Обновить статистику в БД"""
     db = get_db_session()
 
     try:
+        # Получаем всех клиентов из Xray
+        xray_clients = get_clients_from_xray()
+
+        if not xray_clients:
+            print("⚠️ Не найдено клиентов в Xray API")
+            return
+
+        print(f"📊 Найдено клиентов в Xray: {len(xray_clients)}")
+
         updated_count = 0
 
-        for email, data in client_data.items():
-            print(f"🔍 Поиск клиента: {email}")
+        for email in xray_clients:
+            print(f"🔍 Обработка: {email}")
 
-            # 🔥 Извлекаем ID из email (client_3_... → 3)
+            # Извлекаем ID из email (client_3_... → 3)
             client = None
             match = re.search(r'client_(\d+)', email)
 
@@ -107,41 +75,43 @@ def update_database(client_data: dict):
                 if client:
                     print(f"   ✅ Найден по ID: {client_id} → {client.full_name}")
 
-            # Если не нашли по ID - пробуем по имени
-            if not client:
-                client = db.query(Client).filter(
-                    func.lower(Client.full_name).contains(email.lower())
-                ).first()
-
             if client:
-                # Обновляем статистику
-                client.last_seen = data['last_seen']
-                if client.connection_count is None:
-                    client.connection_count = 0
-                client.connection_count += data['connections']
+                # Получаем трафик из Xray API
+                traffic = get_client_traffic(email)
 
-                # Тоже самое для трафика
+                # Инициализируем None значения
                 if client.traffic_upload is None:
                     client.traffic_upload = 0
                 if client.traffic_download is None:
                     client.traffic_download = 0
+                if client.connection_count is None:
+                    client.connection_count = 0
+
+                # Обновляем статистику (накапливаем)
+                # Важно: Xray возвращает общие значения, а не прирост
+                # Поэтому берём максимальное значение
+                client.traffic_upload = max(client.traffic_upload, traffic.get('upload', 0))
+                client.traffic_download = max(client.traffic_download, traffic.get('download', 0))
+                client.last_seen = datetime.now(timezone.utc)
                 client.is_online = True
+                client.connection_count += 1
+
                 updated_count += 1
-                print(f"   ✅ {client.full_name}: +{data['connections']} подключений")
+                print(
+                    f"   ✅ {client.full_name}: ↑{stats_service.format_bytes(traffic.get('upload', 0))} ↓{stats_service.format_bytes(traffic.get('download', 0))}")
             else:
-                print(f"   ❌ Не найден в БД")
+                print(f"   ❌ Клиент '{email}' не найден в БД")
 
         db.commit()
         print(f"\n🎉 Обновлено {updated_count} клиентов")
 
-        # Сбрасываем is_online для тех кто не был в логах
+        # Сбрасываем is_online для тех кто не был в Xray
         db.query(Client).update({Client.is_online: False})
         db.commit()
 
     except Exception as e:
         print(f"❌ Ошибка обновления БД: {e}")
         import traceback
-
         traceback.print_exc()
         db.rollback()
     finally:
@@ -149,28 +119,19 @@ def update_database(client_data: dict):
 
 
 def main():
-    print("🔄 Обновление статистики из логов Xray...")
+    print("🔄 Обновление статистики из Xray API...")
     print(f"⏰ Время: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
 
-    # Получаем логи
-    logs = get_xray_logs()
-
-    if not logs:
-        print("⚠️ Логи пустые")
+    # Проверяем подключение к API
+    if not stats_service.connect():
+        print("❌ Не удалось подключиться к Xray API")
+        print("💡 Проверьте что Xray запущен и API порт 10085 открыт")
         return
 
-    # Парсим трафик
-    traffic_data = parse_traffic_from_logs(logs)
-
-    if not traffic_data:
-        print("⚠️ Не найдены данные о трафике")
-        print("💡 Возможно, нужно включить логирование трафика в Xray")
-        return
-
-    print(f"📊 Найдено клиентов с трафиком: {len(traffic_data)}\n")
+    print("✅ Подключение к Xray API успешно!")
 
     # Обновляем БД
-    update_database(traffic_data)
+    update_database()
 
 
 if __name__ == "__main__":

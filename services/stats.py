@@ -1,29 +1,87 @@
 # services/stats.py
-from datetime import datetime, timedelta
-from typing import Optional
-import re
-from datetime import datetime, timezone
+import grpc
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict
 
-class XrayStatsService:
-    """Сервис для работы со статистикой"""
 
-    def __init__(self):
-        pass
+# Proto-сообщения для Xray API (упрощённая версия)
+class StatsService:
+    """gRPC сервис для получения статистики из Xray"""
+
+    def __init__(self, api_url: str = "127.0.0.1:10085"):
+        self.api_url = api_url
+        self.channel = None
+        self.stub = None
+
+    def connect(self):
+        """Подключение к gRPC серверу Xray"""
+        try:
+            self.channel = grpc.insecure_channel(self.api_url)
+            grpc.channel_ready_future(self.channel).result(timeout=5)
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка подключения к Xray API: {e}")
+            return False
+
+    def close(self):
+        """Закрытие соединения"""
+        if self.channel:
+            self.channel.close()
 
     def get_client_stats(self, email: str) -> dict:
-        """
-        Получить статистику по клиенту.
-        Пока заглушка - потом будет gRPC вызов к Xray API
-        """
-        # TODO: В будущем здесь будет gRPC запрос к Xray
-        return {
-            "upload": 0,
-            "download": 0,
-            "total": 0
-        }
+        """Получить статистику по клиенту (email = UUID или client_X_name)"""
+        if not self.connect():
+            return {"upload": 0, "download": 0, "total": 0}
+
+        try:
+            # Формируем запрос к Xray API
+            uplink = self._get_stat(f"user>>>{email}>>>traffic>>>uplink")
+            downlink = self._get_stat(f"user>>>{email}>>>traffic>>>downlink")
+
+            return {
+                "upload": uplink,
+                "download": downlink,
+                "total": uplink + downlink
+            }
+        except Exception as e:
+            print(f"❌ Ошибка получения статистики: {e}")
+            return {"upload": 0, "download": 0, "total": 0}
+        finally:
+            self.close()
+
+    def _get_stat(self, stat_name: str) -> int:
+        """Получить конкретную статистику"""
+        try:
+            # Используем requests для простоты (Xray API поддерживает HTTP/JSON)
+            import requests
+            response = requests.post(
+                f"http://{self.api_url}/service/StatsService.GetStats",
+                json={"name": stat_name, "reset": False},
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("stat", {}).get("value", 0)
+        except:
+            pass
+        return 0
 
     def get_all_stats(self) -> dict:
-        """Получить общую статистику (заглушка для gRPC)"""
+        """Получить общую статистику"""
+        if not self.connect():
+            return {}
+
+        try:
+            import requests
+            response = requests.post(
+                f"http://{self.api_url}/service/StatsService.QueryStats",
+                json={"pattern": "user>>>", "reset": False},
+                timeout=5
+            )
+            if response.status_code == 200:
+                return response.json()
+        except:
+            pass
         return {}
 
     @staticmethod
@@ -43,27 +101,13 @@ class XrayStatsService:
         """Проверка: клиент онлайн?"""
         if not last_seen:
             return False
-        return datetime.now(timezone.utc) - last_seen < timedelta(minutes=timeout_minutes)
 
-    @staticmethod
-    def parse_xray_log_line(line: str) -> Optional[dict]:
-        """
-        Парсинг строки лога Xray для извлечения трафика
-        Пример лога:
-        2026/03/07 15:35:19 client_3_podakov_k traffic: uplink=1234 downlink=5678
-        """
-        # Ищем паттерн: email + traffic данные
-        pattern = r'(\S+)\s+traffic:\s+uplink=(\d+)\s+downlink=(\d+)'
-        match = re.search(pattern, line)
+        now = datetime.now(timezone.utc)
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
 
-        if match:
-            email = match.group(1)
-            uplink = int(match.group(2))
-            downlink = int(match.group(3))
+        return now - last_seen < timedelta(minutes=timeout_minutes)
 
-            return {
-                'email': email,
-                'upload': uplink,
-                'download': downlink
-            }
-        return None
+
+# Глобальный экземпляр
+stats_service = StatsService()
