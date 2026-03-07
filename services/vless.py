@@ -2,7 +2,7 @@
 import uuid
 import json
 import subprocess
-from typing import Optional, Tuple
+from typing import Tuple
 from urllib.parse import quote
 
 
@@ -50,9 +50,7 @@ class VLESSManager:
         client_uuid = self.generate_uuid()
 
         # Email для Xray
-        client_email = email or f"client_{client_id}"
-        # Ограничиваем длину email (Xray требует < 64 символов)
-        client_email = client_email[:60].replace(" ", "_").lower()
+        client_email = (email or f"client_{client_id}")[:60].replace(" ", "_").lower()
 
         # Чтение текущего конфига
         try:
@@ -164,7 +162,6 @@ class VLESSManager:
             )
         except subprocess.CalledProcessError as e:
             print(f"⚠️ Ошибка перезапуска Xray: {e}")
-            # Пробуем reload вместо restart
             subprocess.run(
                 ["sudo", "systemctl", "reload", "xray"],
                 capture_output=True
