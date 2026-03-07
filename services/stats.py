@@ -1,49 +1,27 @@
 # services/stats.py
-import grpc
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 
 class XrayStatsService:
-    """gRPC сервис для получения статистики из Xray"""
+    """Сервис для получения статистики из Xray API"""
 
     def __init__(self, api_url: str = "127.0.0.1:10085"):
         self.api_url = api_url
-        self.channel = None
-        self.stub = None
-
-    def connect(self):
-        """Подключение к gRPC серверу Xray"""
-        try:
-            self.channel = grpc.insecure_channel(self.api_url)
-            grpc.channel_ready_future(self.channel).result(timeout=5)
-            return True
-        except Exception as e:
-            print(f"❌ Ошибка подключения к Xray API: {e}")
-            return False
-
-    def close(self):
-        """Закрытие соединения"""
-        if self.channel:
-            self.channel.close()
 
     def get_client_stats(self, email: str) -> dict:
-        """Получить статистику по клиенту (email = UUID или client_X_name)"""
-        if not self.connect():
-            return {"upload": 0, "download": 0, "total": 0}
-
+        """Получить статистику по клиенту"""
         try:
-            # Используем requests для простоты (Xray API поддерживает HTTP/JSON)
             import requests
 
-            # Формируем запрос для uplink
+            # Запрос для uplink
             uplink_response = requests.post(
                 f"http://{self.api_url}/service/StatsService.GetStats",
                 json={"name": f"user>>>{email}>>>traffic>>>uplink", "reset": False},
                 timeout=5
             )
 
-            # Формируем запрос для downlink
+            # Запрос для downlink
             downlink_response = requests.post(
                 f"http://{self.api_url}/service/StatsService.GetStats",
                 json={"name": f"user>>>{email}>>>traffic>>>downlink", "reset": False},
@@ -69,8 +47,6 @@ class XrayStatsService:
         except Exception as e:
             print(f"❌ Ошибка получения статистики: {e}")
             return {"upload": 0, "download": 0, "total": 0}
-        finally:
-            self.close()
 
     def get_all_stats(self) -> dict:
         """Получить общую статистику"""
@@ -93,7 +69,7 @@ class XrayStatsService:
             import requests
             response = requests.post(
                 f"http://{self.api_url}/service/StatsService.QueryStats",
-                json={"pattern": "", "reset": False},
+                json={"pattern": "user>>>", "reset": False},
                 timeout=5
             )
             return response.status_code == 200
