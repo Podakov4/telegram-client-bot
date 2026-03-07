@@ -31,17 +31,31 @@ except ImportError as e:
         print(f"   Files: {os.listdir(os.path.join(BASE_DIR, 'database'))}")
     sys.exit(1)
 
-
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 def get_xray_logs():
     """Получить последние логи Xray"""
     try:
+        # Увеличиваем таймаут до 30 секунд и берём меньше данных
         result = subprocess.run(
-            ['sudo', 'journalctl', '-u', 'xray', '--since', '5 minutes ago', '--no-pager'],
+            ['sudo', 'journalctl', '-u', 'xray', '-n', '1000', '--no-pager'],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=30  # Увеличили с 10 до 30 секунд
         )
         return result.stdout
+    except subprocess.TimeoutExpired:
+        print("⚠️ Таймаут при получении логов (слишком много данных)")
+        # Пробуем получить только последние 100 строк
+        try:
+            result = subprocess.run(
+                ['sudo', 'journalctl', '-u', 'xray', '-n', '100', '--no-pager'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            return result.stdout
+        except:
+            return ""
     except Exception as e:
         print(f"❌ Ошибка получения логов: {e}")
         return ""
