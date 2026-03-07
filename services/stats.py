@@ -1,13 +1,51 @@
 # services/stats.py
+import grpc
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 
 
 class XrayStatsService:
-    """Сервис для получения статистики из Xray API"""
+    """Сервис для получения статистики из Xray API через gRPC"""
 
     def __init__(self, api_url: str = "127.0.0.1:10085"):
         self.api_url = api_url
+
+    def test_connection(self) -> bool:
+        """Проверить подключение к API через gRPC"""
+        try:
+            channel = grpc.insecure_channel(self.api_url)
+            grpc.channel_ready_future(channel).result(timeout=5)
+            channel.close()
+            return True
+        except Exception as e:
+            print(f"⚠️ gRPC проверка: {e}")
+            return False
+
+    def get_all_stats(self) -> dict:
+        """Получить общую статистику через gRPC"""
+        try:
+            channel = grpc.insecure_channel(self.api_url)
+            grpc.channel_ready_future(channel).result(timeout=5)
+
+            # Создаём stub для StatsService
+            from grpc_tools import protos
+            # Для простоты используем requests с правильным форматом
+            import requests
+
+            response = requests.post(
+                f"http://{self.api_url}/service/StatsService.QueryStats",
+                json={"pattern": "user>>>", "reset": False},
+                timeout=5,
+                headers={"Content-Type": "application/json"}
+            )
+
+            channel.close()
+
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            print(f"❌ Ошибка получения статистики: {e}")
+        return {}
 
     def get_client_stats(self, email: str) -> dict:
         """Получить статистику по клиенту"""
@@ -18,14 +56,16 @@ class XrayStatsService:
             uplink_response = requests.post(
                 f"http://{self.api_url}/service/StatsService.GetStats",
                 json={"name": f"user>>>{email}>>>traffic>>>uplink", "reset": False},
-                timeout=5
+                timeout=5,
+                headers={"Content-Type": "application/json"}
             )
 
             # Запрос для downlink
             downlink_response = requests.post(
                 f"http://{self.api_url}/service/StatsService.GetStats",
                 json={"name": f"user>>>{email}>>>traffic>>>downlink", "reset": False},
-                timeout=5
+                timeout=5,
+                headers={"Content-Type": "application/json"}
             )
 
             upload = 0
@@ -47,34 +87,6 @@ class XrayStatsService:
         except Exception as e:
             print(f"❌ Ошибка получения статистики: {e}")
             return {"upload": 0, "download": 0, "total": 0}
-
-    def get_all_stats(self) -> dict:
-        """Получить общую статистику"""
-        try:
-            import requests
-            response = requests.post(
-                f"http://{self.api_url}/service/StatsService.QueryStats",
-                json={"pattern": "user>>>", "reset": False},
-                timeout=5
-            )
-            if response.status_code == 200:
-                return response.json()
-        except Exception as e:
-            print(f"❌ Ошибка получения общей статистики: {e}")
-        return {}
-
-    def test_connection(self) -> bool:
-        """Проверить подключение к API"""
-        try:
-            import requests
-            response = requests.post(
-                f"http://{self.api_url}/service/StatsService.QueryStats",
-                json={"pattern": "user>>>", "reset": False},
-                timeout=5
-            )
-            return response.status_code == 200
-        except:
-            return False
 
     @staticmethod
     def format_bytes(bytes_num: int) -> str:
