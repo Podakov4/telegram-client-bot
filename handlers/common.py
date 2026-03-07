@@ -118,12 +118,16 @@ async def show_main_menu(message: types.Message, client: Client):
     )
 
 
+
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
-    """Возврат в главное меню"""
+    """Кнопка главное меню (аналог /start)"""
     await state.clear()
 
     user_id = callback.from_user.id
+    username = callback.from_user.username
+    full_name = callback.from_user.full_name
+
     db: Session = get_db_session()
     try:
         client = db.query(Client).filter(
@@ -131,9 +135,38 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
         ).first()
 
         if client:
-            await show_main_menu(callback.message, client)
+            # Клиент зарегистрирован
+            status_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+
+            text = (
+                f"👋 <b>С возвращением, {escape(full_name or 'пользователь')}!</b>\n\n"
+                f"<b>Статус подписки:</b> {status_text}\n"
+                f"<b>ID клиента:</b> <code>{client.id}</code>\n\n"
+                f"Выберите действие:"
+            )
         else:
-            await callback.message.answer("❌ Ошибка. Нажмите /start")
+            # Новый клиент
+            text = (
+                f"👋 <b>Добро пожаловать, {escape(full_name or 'пользователь')}!</b>\n\n"
+                f"Я бот для предоставления VPN доступа.\n\n"
+                f"<b>Как это работает:</b>\n"
+                f"1️⃣ Нажмите <b>'💳 Оплатить подписку'</b>\n"
+                f"2️⃣ Выберите тариф и оплатите\n"
+                f"3️⃣ После оплаты получите VPN ссылку\n"
+                f"4️⃣ Подключайтесь через Hiddify или Happ\n\n"
+                f"<b>Тарифы:</b>\n"
+                f"💰 300₽/месяц\n"
+                f"💰 800₽/3 месяца (выгода 100₽)\n"
+                f"💰 3000₽/год (выгода 600₽)\n\n"
+                f"Выберите действие ниже 👇"
+            )
+
+        await callback.message.edit_text(
+            text,
+            reply_markup=inline.main_menu_keyboard(),
+            parse_mode="HTML"
+        )
+
     finally:
         db.close()
 
@@ -447,3 +480,86 @@ async def cb_copy_vpn_now(callback: CallbackQuery):
         db.close()
 
 
+@router.message(Command("start"))
+async def cmd_start(message: types.Message, state: FSMContext):
+    """Команда /start - регистрация или вход"""
+    user_id = message.from_user.id
+    username = message.from_user.username
+    full_name = message.from_user.full_name
+
+    db: Session = get_db_session()
+    try:
+        existing_client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if existing_client:
+            # Клиент уже зарегистрирован - покажи меню с кнопками
+            status_text = "✅ Активна" if existing_client.is_active else "❌ Не оплачена"
+
+            text = (
+                f"👋 <b>С возвращением, {escape(full_name or 'пользователь')}!</b>\n\n"
+                f"<b>Статус подписки:</b> {status_text}\n"
+                f"<b>ID клиента:</b> <code>{existing_client.id}</code>\n\n"
+                f"Выберите действие:"
+            )
+
+            await message.answer(
+                text,
+                reply_markup=inline.main_menu_keyboard(),
+                parse_mode="HTML"
+            )
+        else:
+            # Новый клиент - регистрируем
+            new_client = Client(
+                telegram_id=str(user_id),
+                username=username,
+                full_name=full_name,
+                phone=None,
+                email=None,
+                notes=None,
+                is_active=False
+            )
+            db.add(new_client)
+            db.commit()
+            db.refresh(new_client)
+
+            text = (
+                f"👋 <b>Добро пожаловать, {escape(full_name or 'пользователь')}!</b>\n\n"
+                f"Я бот для предоставления VPN доступа.\n\n"
+                f"<b>Как это работает:</b>\n"
+                f"1️⃣ Нажмите <b>'💳 Оплатить подписку'</b>\n"
+                f"2️⃣ Выберите тариф и оплатите\n"
+                f"3️⃣ После оплаты получите VPN ссылку\n"
+                f"4️⃣ Подключайтесь через Hiddify или Happ\n\n"
+                f"<b>Тарифы:</b>\n"
+                f"💰 300₽/месяц\n"
+                f"💰 800₽/3 месяца (выгода 100₽)\n"
+                f"💰 3000₽/год (выгода 600₽)\n\n"
+                f"Выберите действие ниже 👇"
+            )
+
+            await message.answer(
+                text,
+                reply_markup=inline.main_menu_keyboard(),
+                parse_mode="HTML"
+            )
+
+            # Уведомление админу
+            for admin_id in config.ADMIN_IDS:
+                try:
+                    await message.bot.send_message(
+                        admin_id,
+                        f"🔔 <b>Новый клиент!</b>\n\n"
+                        f"<b>ID:</b> <code>{new_client.id}</code>\n"
+                        f"<b>Имя:</b> {escape(full_name or 'Не указано')}\n"
+                        f"<b>Username:</b> @{username or 'Не указан'}\n"
+                        f"<b>Telegram ID:</b> <code>{user_id}</code>\n\n"
+                        f"<i>Ожидает оплату...</i>",
+                        parse_mode="HTML"
+                    )
+                except:
+                    pass
+
+    finally:
+        db.close()
