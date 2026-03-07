@@ -13,7 +13,6 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 import config
 from services.stats import XrayStatsService
 from datetime import datetime, timezone
-from services.stats import XrayStatsService
 from datetime import datetime, timezone
 
 # Инициализация сервиса статистики

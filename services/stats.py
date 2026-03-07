@@ -5,7 +5,7 @@ from typing import Optional, Dict
 
 
 # Proto-сообщения для Xray API (упрощённая версия)
-class StatsService:
+class XrayStatsService:
     """gRPC сервис для получения статистики из Xray"""
 
     def __init__(self, api_url: str = "127.0.0.1:10085"):
