@@ -116,7 +116,15 @@ def update_database(client_data: dict):
             if client:
                 # Обновляем статистику
                 client.last_seen = data['last_seen']
+                if client.connection_count is None:
+                    client.connection_count = 0
                 client.connection_count += data['connections']
+
+                # Тоже самое для трафика
+                if client.traffic_upload is None:
+                    client.traffic_upload = 0
+                if client.traffic_download is None:
+                    client.traffic_download = 0
                 client.is_online = True
                 updated_count += 1
                 print(f"   ✅ {client.full_name}: +{data['connections']} подключений")
