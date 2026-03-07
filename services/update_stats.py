@@ -94,26 +94,34 @@ def update_database(client_data: dict):
         updated_count = 0
 
         for email, data in client_data.items():
-            # Ищем клиента по email
-            client = db.query(Client).filter(
-                func.lower(Client.full_name).contains(email.lower())
-            ).first()
+            print(f"🔍 Поиск клиента: {email}")
 
+            # 🔥 Извлекаем ID из email (client_3_... → 3)
+            client = None
+            match = re.search(r'client_(\d+)', email)
+
+            if match:
+                client_id = int(match.group(1))
+                client = db.query(Client).filter(Client.id == client_id).first()
+
+                if client:
+                    print(f"   ✅ Найден по ID: {client_id} → {client.full_name}")
+
+            # Если не нашли по ID - пробуем по имени
             if not client:
-                # Пробуем найти по username
                 client = db.query(Client).filter(
-                    func.lower(Client.username).contains(email.lower())
+                    func.lower(Client.full_name).contains(email.lower())
                 ).first()
 
             if client:
                 # Обновляем статистику
                 client.last_seen = data['last_seen']
                 client.connection_count += data['connections']
-                client.is_online = True  # Считаем что онлайн если есть в логах
+                client.is_online = True
                 updated_count += 1
-                print(f"✅ {client.full_name}: +{data['connections']} подключений")
+                print(f"   ✅ {client.full_name}: +{data['connections']} подключений")
             else:
-                print(f"⚠️  Клиент '{email}' не найден в БД")
+                print(f"   ❌ Не найден в БД")
 
         db.commit()
         print(f"\n🎉 Обновлено {updated_count} клиентов")
@@ -124,6 +132,9 @@ def update_database(client_data: dict):
 
     except Exception as e:
         print(f"❌ Ошибка обновления БД: {e}")
+        import traceback
+
+        traceback.print_exc()
         db.rollback()
     finally:
         db.close()
