@@ -202,7 +202,7 @@ async def cb_process_payment(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "confirm_payment_test")
 async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
-    """Тестовое подтверждение оплаты (ПОТОМ УДАЛИТЬ!)"""
+    """Тестовое подтверждение оплаты"""
     user_id = callback.from_user.id
 
     db: Session = get_db_session()
@@ -230,19 +230,20 @@ async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
         client.wireguard_config = vless_link
         db.commit()
 
-        text = (
+        # 🔥 Отправляем ссылку с кнопкой копирования
+        await callback.message.answer(
             f"✅ <b>Оплата подтверждена!</b>\n\n"
             f"Ваша подписка активирована.\n\n"
             f"🔗 <b>Ваша VPN ссылка (VLESS):</b>\n"
             f"<code>{escape(vless_link)}</code>\n\n"
             f"📱 <b>Для подключения:</b>\n"
-            f"1. Скачайте <b>Hiddify</b> или <b>Happ</b>\n"
-            f"2. Нажмите <b>'+'</b> и вставьте ссылку\n"
-            f"3. Подключайтесь!\n\n"
-            f"<i>Ссылку всегда можно получить через меню '🔗 Моя VPN ссылка'</i>"
+            f"1. Нажмите <b>'📋 Копировать ссылку'</b> ниже\n"
+            f"2. Откройте Hiddify или Happ\n"
+            f"3. Вставьте ссылку и подключайтесь!\n\n"
+            f"<i>Ссылку всегда можно получить через меню</i>",
+            reply_markup=inline.vpn_ready_keyboard()
         )
 
-        await callback.message.edit_text(text)
         await state.clear()
 
         # Уведомление админу
@@ -386,6 +387,62 @@ async def cb_cancel_payment(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# Импорты в начале файла
-from aiogram.types import CallbackQuery
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+@router.callback_query(F.data.startswith("copy_vpn:"))
+async def cb_copy_vpn(callback: CallbackQuery):
+    """Копирование VPN ссылки"""
+    user_id = callback.from_user.id
+
+    # Извлекаем ссылку из callback_data
+    vpn_link = callback.data.replace("copy_vpn:", "")
+
+    db: Session = get_db_session()
+    try:
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if not client or not client.is_active or not client.wireguard_config:
+            await callback.message.answer("❌ У вас нет активной VPN ссылки")
+            await callback.answer()
+            return
+
+        # 🔥 Отправляем ссылку отдельным сообщением - её можно скопировать!
+        await callback.message.answer(
+            f"<code>{escape(vpn_link)}</code>",
+            parse_mode="HTML"
+        )
+
+        await callback.answer("✅ Ссылка отправлена! Нажмите на неё чтобы скопировать", show_alert=True)
+
+    finally:
+        db.close()
+
+
+@router.callback_query(F.data == "copy_vpn_now")
+async def cb_copy_vpn_now(callback: CallbackQuery):
+    """Копирование VPN ссылки (после оплаты)"""
+    user_id = callback.from_user.id
+
+    db: Session = get_db_session()
+    try:
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if not client or not client.wireguard_config:
+            await callback.message.answer("❌ VPN ссылка недоступна")
+            await callback.answer()
+            return
+
+        # 🔥 Отправляем ссылку отдельным сообщением
+        await callback.message.answer(
+            f"<code>{escape(client.wireguard_config)}</code>",
+            parse_mode="HTML"
+        )
+
+        await callback.answer("✅ Ссылка отправлена! Нажмите на неё чтобы скопировать", show_alert=True)
+
+    finally:
+        db.close()
+
+

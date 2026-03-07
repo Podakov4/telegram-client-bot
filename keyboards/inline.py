@@ -9,7 +9,7 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
     builder.button(text="🔗 Моя VPN ссылка", callback_data="get_vpn")
     builder.button(text="👤 Мой профиль", callback_data="profile")
     builder.button(text="❓ Помощь", callback_data="help")
-    builder.adjust(1, 1, 2)  # По 1 кнопке в ряду, последние 2 вместе
+    builder.adjust(1, 1, 2)
     return builder.as_markup()
 
 def payment_keyboard() -> InlineKeyboardMarkup:
@@ -25,13 +25,22 @@ def payment_keyboard() -> InlineKeyboardMarkup:
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     """Кнопка назад в меню"""
     builder = InlineKeyboardBuilder()
-    builder.button(text=" Главное меню", callback_data="main_menu")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
     return builder.as_markup()
 
-def vpn_ready_keyboard(vpn_link: str) -> InlineKeyboardMarkup:
+def vpn_link_keyboard(vpn_link: str) -> InlineKeyboardMarkup:
     """Кнопка для копирования VPN ссылки"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="📋 Скопировать ссылку", callback_data=f"copy_vpn:{vpn_link[:50]}")
+    # Кнопка с VPN ссылкой (отправит ссылку для копирования)
+    builder.button(text="📋 Копировать VPN ссылку", callback_data=f"copy_vpn:{vpn_link}")
+    builder.button(text="🏠 Главное меню", callback_data="main_menu")
+    builder.adjust(1, 1)
+    return builder.as_markup()
+
+def vpn_ready_keyboard() -> InlineKeyboardMarkup:
+    """Кнопка после успешной оплаты"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📋 Копировать ссылку", callback_data="copy_vpn_now")
     builder.button(text="🏠 Главное меню", callback_data="main_menu")
     builder.adjust(1, 1)
     return builder.as_markup()
