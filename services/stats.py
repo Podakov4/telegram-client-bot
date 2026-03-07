@@ -1,138 +1,129 @@
-#!/usr/bin/env python3
-"""
-Скрипт для обновления статистики из Xray API (gRPC)
-Запускается каждые 5 минут через cron
-"""
-
-import sys
-import os
-import re
-from datetime import datetime, timezone
-
-# Добавляем корневую папку проекта в путь
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, BASE_DIR)
-
-from database import get_db_session, Client
-from services.stats import XrayStatsService  # ← Исправлено!
-from sqlalchemy import func
-
-# Инициализация сервиса статистики
-stats_service = XrayStatsService()  # ← Исправлено!
+# services/stats.py
+import grpc
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict
 
 
-def get_clients_from_xray() -> list:
-    """Получить список всех клиентов из Xray API"""
-    all_stats = stats_service.get_all_stats()
+class XrayStatsService:
+    """gRPC сервис для получения статистики из Xray"""
 
-    clients = []
-    if 'stat' in all_stats:
-        for stat in all_stats['stat']:
-            name = stat.get('name', '')
-            # Извлекаем email из имени статистики
-            # Формат: user>>>email>>>traffic>>>uplink/downlink
-            match = re.search(r'user>>>(\S+)>>>traffic', name)
-            if match:
-                email = match.group(1)
-                if email not in clients:
-                    clients.append(email)
+    def __init__(self, api_url: str = "127.0.0.1:10085"):
+        self.api_url = api_url
+        self.channel = None
+        self.stub = None
 
-    return clients
+    def connect(self):
+        """Подключение к gRPC серверу Xray"""
+        try:
+            self.channel = grpc.insecure_channel(self.api_url)
+            grpc.channel_ready_future(self.channel).result(timeout=5)
+            return True
+        except Exception as e:
+            print(f"❌ Ошибка подключения к Xray API: {e}")
+            return False
+
+    def close(self):
+        """Закрытие соединения"""
+        if self.channel:
+            self.channel.close()
+
+    def get_client_stats(self, email: str) -> dict:
+        """Получить статистику по клиенту (email = UUID или client_X_name)"""
+        if not self.connect():
+            return {"upload": 0, "download": 0, "total": 0}
+
+        try:
+            # Используем requests для простоты (Xray API поддерживает HTTP/JSON)
+            import requests
+
+            # Формируем запрос для uplink
+            uplink_response = requests.post(
+                f"http://{self.api_url}/service/StatsService.GetStats",
+                json={"name": f"user>>>{email}>>>traffic>>>uplink", "reset": False},
+                timeout=5
+            )
+
+            # Формируем запрос для downlink
+            downlink_response = requests.post(
+                f"http://{self.api_url}/service/StatsService.GetStats",
+                json={"name": f"user>>>{email}>>>traffic>>>downlink", "reset": False},
+                timeout=5
+            )
+
+            upload = 0
+            download = 0
+
+            if uplink_response.status_code == 200:
+                data = uplink_response.json()
+                upload = data.get("stat", {}).get("value", 0)
+
+            if downlink_response.status_code == 200:
+                data = downlink_response.json()
+                download = data.get("stat", {}).get("value", 0)
+
+            return {
+                "upload": upload,
+                "download": download,
+                "total": upload + download
+            }
+        except Exception as e:
+            print(f"❌ Ошибка получения статистики: {e}")
+            return {"upload": 0, "download": 0, "total": 0}
+        finally:
+            self.close()
+
+    def get_all_stats(self) -> dict:
+        """Получить общую статистику"""
+        try:
+            import requests
+            response = requests.post(
+                f"http://{self.api_url}/service/StatsService.QueryStats",
+                json={"pattern": "user>>>", "reset": False},
+                timeout=5
+            )
+            if response.status_code == 200:
+                return response.json()
+        except Exception as e:
+            print(f"❌ Ошибка получения общей статистики: {e}")
+        return {}
+
+    def test_connection(self) -> bool:
+        """Проверить подключение к API"""
+        try:
+            import requests
+            response = requests.post(
+                f"http://{self.api_url}/service/StatsService.QueryStats",
+                json={"pattern": "", "reset": False},
+                timeout=5
+            )
+            return response.status_code == 200
+        except:
+            return False
+
+    @staticmethod
+    def format_bytes(bytes_num: int) -> str:
+        """Форматирование байтов в человекочитаемый вид"""
+        if bytes_num < 0:
+            bytes_num = 0
+
+        bytes_num = float(bytes_num)
+        for unit in ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']:
+            if bytes_num < 1024:
+                return f"{bytes_num:.2f} {unit}"
+            bytes_num /= 1024
+        return f"{bytes_num:.2f} ПБ"
+
+    def is_client_online(self, last_seen: Optional[datetime], timeout_minutes: int = 5) -> bool:
+        """Проверка: клиент онлайн?"""
+        if not last_seen:
+            return False
+
+        now = datetime.now(timezone.utc)
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+
+        return now - last_seen < timedelta(minutes=timeout_minutes)
 
 
-def get_client_traffic(email: str) -> dict:
-    """Получить трафик для конкретного клиента"""
-    return stats_service.get_client_stats(email)
-
-
-def update_database():
-    """Обновить статистику в БД"""
-    db = get_db_session()
-
-    try:
-        # Получаем всех клиентов из Xray
-        xray_clients = get_clients_from_xray()
-
-        if not xray_clients:
-            print("⚠️ Не найдено клиентов в Xray API")
-            return
-
-        print(f"📊 Найдено клиентов в Xray: {len(xray_clients)}")
-
-        updated_count = 0
-
-        for email in xray_clients:
-            print(f"🔍 Обработка: {email}")
-
-            # Извлекаем ID из email (client_3_... → 3)
-            client = None
-            match = re.search(r'client_(\d+)', email)
-
-            if match:
-                client_id = int(match.group(1))
-                client = db.query(Client).filter(Client.id == client_id).first()
-
-                if client:
-                    print(f"   ✅ Найден по ID: {client_id} → {client.full_name}")
-
-            if client:
-                # Получаем трафик из Xray API
-                traffic = get_client_traffic(email)
-
-                # Инициализируем None значения
-                if client.traffic_upload is None:
-                    client.traffic_upload = 0
-                if client.traffic_download is None:
-                    client.traffic_download = 0
-                if client.connection_count is None:
-                    client.connection_count = 0
-
-                # Обновляем статистику (накапливаем)
-                # Важно: Xray возвращает общие значения, а не прирост
-                # Поэтому берём максимальное значение
-                client.traffic_upload = max(client.traffic_upload, traffic.get('upload', 0))
-                client.traffic_download = max(client.traffic_download, traffic.get('download', 0))
-                client.last_seen = datetime.now(timezone.utc)
-                client.is_online = True
-                client.connection_count += 1
-
-                updated_count += 1
-                print(
-                    f"   ✅ {client.full_name}: ↑{stats_service.format_bytes(traffic.get('upload', 0))} ↓{stats_service.format_bytes(traffic.get('download', 0))}")
-            else:
-                print(f"   ❌ Клиент '{email}' не найден в БД")
-
-        db.commit()
-        print(f"\n🎉 Обновлено {updated_count} клиентов")
-
-        # Сбрасываем is_online для тех кто не был в Xray
-        db.query(Client).update({Client.is_online: False})
-        db.commit()
-
-    except Exception as e:
-        print(f"❌ Ошибка обновления БД: {e}")
-        import traceback
-        traceback.print_exc()
-        db.rollback()
-    finally:
-        db.close()
-
-
-def main():
-    print("🔄 Обновление статистики из Xray API...")
-    print(f"⏰ Время: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
-
-    # Проверяем подключение к API
-    if not stats_service.connect():
-        print("❌ Не удалось подключиться к Xray API")
-        print("💡 Проверьте что Xray запущен и API порт 10085 открыт")
-        return
-
-    print("✅ Подключение к Xray API успешно!")
-
-    # Обновляем БД
-    update_database()
-
-
-if __name__ == "__main__":
-    main()
+# Глобальный экземпляр
+stats_service = XrayStatsService()
