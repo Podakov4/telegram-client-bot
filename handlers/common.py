@@ -1,179 +1,391 @@
 # handlers/common.py
 from aiogram import types, Router, F
 from aiogram.filters import Command
-from keyboards import reply
-import config
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from sqlalchemy.orm import Session
+from database import get_db_session, Client
+from services.vless import VLESSManager
+from keyboards import inline
+from html import escape
+from aiogram.types import CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+import config
 
 router = Router()
 
+# Инициализация VLESS менеджера
+vless_manager = VLESSManager(
+    server_ip=config.WG_SERVER_IP,
+    port=config.WG_PORT,
+    path="/vless",
+    host="freeth.ru"
+)
+
+
+# Машина состояний для оплаты
+class Payment(StatesGroup):
+    waiting_for_payment = State()
+    paid = State()
+
 
 @router.message(Command("start"))
-async def cmd_start(message: types.Message):
-    """Команда /start"""
-    user_id = message.from_user.id
-
-    if user_id in config.ADMIN_IDS:
-        text = (
-            "👋 <b>Привет, Админ!</b>\n\n"
-            "Я бот для управления клиентами.\n\n"
-            "Выберите действие из меню ниже 👇"
-        )
-        # 🔥 Используем reply_markup вместо reply_markup=inline...
-        await message.answer(text, reply_markup=reply.main_menu_keyboard())
-    else:
-        text = (
-            "👋 <b>Привет!</b>\n\n"
-            "Я бот для управления клиентов.\n"
-            "Свяжитесь с администратором для доступа."
-        )
-        await message.answer(text)
-
-
-@router.message(Command("help"))
-async def cmd_help(message: types.Message):
-    """Команда /help"""
-    text = (
-        "📖 <b>Помощь</b>\n\n"
-        "<b>Команды:</b>\n"
-        "/start - Запустить бота\n"
-        "/add_client - Добавить нового клиента\n"
-        "/clients - Показать всех клиентов\n"
-        "/me - Узнать ваш Telegram ID\n"
-        "/help - Эта справка\n\n"
-        "<b>Или используйте кнопки в меню!</b>"
-    )
-    await message.answer(text, reply_markup=reply.back_keyboard())
-
-
-@router.message(Command("me"))
-async def cmd_me(message: types.Message):
-    """Команда /me"""
+async def cmd_start(message: types.Message, state: FSMContext):
+    """Команда /start - регистрация или вход"""
     user_id = message.from_user.id
     username = message.from_user.username
     full_name = message.from_user.full_name
 
-    username_safe = (username or 'не указан').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-    full_name_safe = (full_name or '').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    db: Session = get_db_session()
+    try:
+        # Проверка - есть ли уже клиент в БД
+        existing_client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if existing_client:
+            # Клиент уже зарегистрирован
+            await show_main_menu(message, existing_client)
+        else:
+            # Новый клиент - регистрируем
+            new_client = Client(
+                telegram_id=str(user_id),
+                username=username,
+                full_name=full_name,
+                phone=None,
+                email=None,
+                notes=None,
+                is_active=False  # Пока не активен до оплаты
+            )
+            db.add(new_client)
+            db.commit()
+            db.refresh(new_client)
+
+            # Приветственное сообщение с меню
+            text = (
+                f"👋 <b>Добро пожаловать, {escape(full_name or 'пользователь')}!</b>\n\n"
+                f"Я бот для предоставления VPN доступа.\n\n"
+                f"<b>Как это работает:</b>\n"
+                f"1️⃣ Нажмите <b>'💳 Оплатить подписку'</b>\n"
+                f"2️⃣ Выберите тариф и оплатите\n"
+                f"3️⃣ После оплаты получите VPN ссылку\n"
+                f"4️⃣ Подключайтесь через Hiddify или Happ\n\n"
+                f"<b>Тарифы:</b>\n"
+                f"💰 300₽/месяц\n"
+                f"💰 800₽/3 месяца (выгода 100₽)\n"
+                f"💰 3000₽/год (выгода 600₽)\n\n"
+                f"Выберите действие ниже 👇"
+            )
+
+            await message.answer(
+                text,
+                reply_markup=inline.main_menu_keyboard()
+            )
+
+            # Уведомление админу о новом клиенте
+            for admin_id in config.ADMIN_IDS:
+                try:
+                    await message.bot.send_message(
+                        admin_id,
+                        f"🔔 <b>Новый клиент!</b>\n\n"
+                        f"<b>ID:</b> <code>{new_client.id}</code>\n"
+                        f"<b>Имя:</b> {escape(full_name or 'Не указано')}\n"
+                        f"<b>Username:</b> @{username or 'Не указан'}\n"
+                        f"<b>Telegram ID:</b> <code>{user_id}</code>\n\n"
+                        f"<i>Ожидает оплату...</i>"
+                    )
+                except:
+                    pass
+
+    finally:
+        db.close()
+
+
+async def show_main_menu(message: types.Message, client: Client):
+    """Показать главное меню"""
+    status_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
 
     text = (
-        f"👤 <b>Ваша информация:</b>\n\n"
-        f"<b>ID:</b> <code>{user_id}</code>\n"
-        f"<b>Username:</b> @{username_safe}\n"
-        f"<b>Имя:</b> {full_name_safe}"
+        f"👋 <b>С возвращением, {escape(client.full_name or 'пользователь')}!</b>\n\n"
+        f"<b>Статус подписки:</b> {status_text}\n"
+        f"<b>ID клиента:</b> <code>{client.id}</code>\n\n"
+        f"Выберите действие:"
     )
 
-    await message.answer(text, reply_markup=reply.back_keyboard())
-
-
-# 🔥 Обработка кнопок меню
-@router.message(F.text == "➕ Добавить клиента")
-async def menu_add_client(message: types.Message, state: FSMContext):
-    """Кнопка 'Добавить клиента'"""
-    from aiogram.fsm.context import FSMContext
     await message.answer(
-        "📝 <b>Добавление нового клиента</b>\n\n"
-        "Введите <b>ФИО клиента</b>:",
-        reply_markup=reply.cancel_keyboard()
+        text,
+        reply_markup=inline.main_menu_keyboard()
     )
-    await state.set_state("add_client:full_name")
 
 
-@router.message(F.text == "📋 Список клиентов")
-async def menu_clients_list(message: types.Message):
-    """Кнопка 'Список клиентов'"""
-    from sqlalchemy.orm import Session
-    from database import get_db_session, Client
+@router.callback_query(F.data == "main_menu")
+async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
+    """Возврат в главное меню"""
+    await state.clear()
+
+    user_id = callback.from_user.id
+    db: Session = get_db_session()
+    try:
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if client:
+            await show_main_menu(callback.message, client)
+        else:
+            await callback.message.answer("❌ Ошибка. Нажмите /start")
+    finally:
+        db.close()
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "pay_subscription")
+async def cb_pay_subscription(callback: CallbackQuery):
+    """Показать тарифы"""
+    text = (
+        "💳 <b>Выберите тариф:</b>\n\n"
+        f"<b> 1 месяц</b> — 300₽\n"
+        f"<b>📅 3 месяца</b> — 800₽ <i>(выгода 100₽)</i>\n"
+        f"<b>📅 12 месяцев</b> — 3000₽ <i>(выгода 600₽)</i>\n\n"
+        f"<i>После оплаты вы получите VPN ссылку для подключения</i>"
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=inline.payment_keyboard()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("pay_"))
+async def cb_process_payment(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора тарифа"""
+    tariff = callback.data
+
+    tariff_names = {
+        "pay_300": "1 месяц (300₽)",
+        "pay_800": "3 месяца (800₽)",
+        "pay_3000": "12 месяцев (3000₽)"
+    }
+
+    tariff_name = tariff_names.get(tariff, "Неизвестный тариф")
+
+    # TODO: Здесь будет интеграция с платежной системой
+    # Пока что просто имитируем оплату
+
+    text = (
+        f"💳 <b>Оплата: {tariff_name}</b>\n\n"
+        f"<b>Реквизиты для оплаты:</b>\n"
+        f"📱 Карта: 0000 0000 0000 0000\n"
+        f"👤 Получатель: ИП Иванов И.И.\n\n"
+        f"<b>Инструкция:</b>\n"
+        f"1. Переведите сумму на карту\n"
+        f"2. Отправьте чек в поддержку\n"
+        f"3. После проверки вы получите VPN доступ\n\n"
+        f"<i>⚠️ В тестовом режиме нажмите '✅ Я оплатил' ниже</i>"
+    )
+
+    # Кнопка для теста (потом удалим)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Я оплатил (тест)", callback_data="confirm_payment_test")
+    builder.button(text="❌ Отмена", callback_data="main_menu")
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=builder.as_markup()
+    )
+
+    await state.set_state(Payment.waiting_for_payment)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "confirm_payment_test")
+async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
+    """Тестовое подтверждение оплаты (ПОТОМ УДАЛИТЬ!)"""
+    user_id = callback.from_user.id
 
     db: Session = get_db_session()
     try:
-        clients = db.query(Client).filter(Client.is_active == True).all()
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
 
-        if not clients:
-            await message.answer(
-                "📭 Клиентов пока нет.",
-                reply_markup=reply.back_keyboard()
-            )
+        if not client:
+            await callback.message.answer("❌ Ошибка. Нажмите /start")
             return
 
-        text = f"📋 <b>Всего клиентов: {len(clients)}</b>\n\n"
-        for client in clients[:10]:
-            text += (
-                f"<b>#{client.id}</b> {client.full_name}\n"
-                f"📱 {client.phone}\n"
-                f"📧 {client.email or '—'}\n\n"
-            )
+        # Активируем клиента
+        client.is_active = True
 
-        if len(clients) > 10:
-            text += f"... и ещё {len(clients) - 10} клиентов"
+        # Генерация VLESS ссылки
+        client_uuid, vless_link = vless_manager.add_client_to_xray(
+            db_session=db,
+            client_id=client.id,
+            full_name=client.full_name or f"User_{user_id}"
+        )
 
-        await message.answer(text, reply_markup=reply.back_keyboard())
+        # Сохранение VLESS конфигурации
+        client.wireguard_public_key = client_uuid
+        client.wireguard_config = vless_link
+        db.commit()
+
+        text = (
+            f"✅ <b>Оплата подтверждена!</b>\n\n"
+            f"Ваша подписка активирована.\n\n"
+            f"🔗 <b>Ваша VPN ссылка (VLESS):</b>\n"
+            f"<code>{escape(vless_link)}</code>\n\n"
+            f"📱 <b>Для подключения:</b>\n"
+            f"1. Скачайте <b>Hiddify</b> или <b>Happ</b>\n"
+            f"2. Нажмите <b>'+'</b> и вставьте ссылку\n"
+            f"3. Подключайтесь!\n\n"
+            f"<i>Ссылку всегда можно получить через меню '🔗 Моя VPN ссылка'</i>"
+        )
+
+        await callback.message.edit_text(text)
+        await state.clear()
+
+        # Уведомление админу
+        for admin_id in config.ADMIN_IDS:
+            try:
+                await callback.message.bot.send_message(
+                    admin_id,
+                    f"💰 <b>Новая оплата!</b>\n\n"
+                    f"<b>Клиент:</b> {escape(client.full_name or 'Не указано')}\n"
+                    f"<b>ID:</b> <code>{client.id}</code>\n"
+                    f"<b>Telegram:</b> @{escape(client.username or 'не указан')}"
+                )
+            except:
+                pass
+
     finally:
         db.close()
 
+    await callback.answer()
 
-@router.message(F.text == "📊 Статистика")
-async def menu_stats(message: types.Message):
-    """Кнопка 'Статистика'"""
-    from sqlalchemy.orm import Session
-    from database import get_db_session, Client
+
+@router.callback_query(F.data == "get_vpn")
+async def cb_get_vpn(callback: CallbackQuery):
+    """Получить VPN ссылку"""
+    user_id = callback.from_user.id
 
     db: Session = get_db_session()
     try:
-        total = db.query(Client).count()
-        active = db.query(Client).filter(Client.is_active == True).count()
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if not client:
+            await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            return
+
+        if not client.is_active:
+            text = (
+                "❌ <b>Подписка не оплачена</b>\n\n"
+                "Для получения доступа к VPN необходимо оплатить подписку.\n\n"
+                "Нажмите <b>'💳 Оплатить подписку'</b> в главном меню."
+            )
+            await callback.message.answer(
+                text,
+                reply_markup=inline.back_to_menu_keyboard()
+            )
+            await callback.answer()
+            return
+
+        if not client.wireguard_config:
+            await callback.message.answer("❌ VPN ссылка не сгенерирована. Обратитесь к администратору.")
+            await callback.answer()
+            return
 
         text = (
-            "📊 <b>Статистика</b>\n\n"
-            f"<b>Всего клиентов:</b> {total}\n"
-            f"<b>Активных:</b> {active}\n"
-            f"<b>Неактивных:</b> {total - active}"
+            f"🔗 <b>Ваша VPN ссылка (VLESS):</b>\n\n"
+            f"<code>{escape(client.wireguard_config)}</code>\n\n"
+            f"📱 <b>Для подключения:</b>\n"
+            f"1. Скачайте <b>Hiddify</b> или <b>Happ</b>\n"
+            f"2. Нажмите <b>'+'</b> и вставьте ссылку\n"
+            f"3. Подключайтесь!"
         )
-        await message.answer(text, reply_markup=reply.back_keyboard())
+
+        await callback.message.answer(text)
+
     finally:
         db.close()
 
+    await callback.answer()
 
-@router.message(F.text == "⚙️ Настройки")
-async def menu_settings(message: types.Message):
-    """Кнопка 'Настройки'"""
+
+@router.callback_query(F.data == "profile")
+async def cb_profile(callback: CallbackQuery):
+    """Показать профиль"""
+    user_id = callback.from_user.id
+
+    db: Session = get_db_session()
+    try:
+        client = db.query(Client).filter(
+            Client.telegram_id == str(user_id)
+        ).first()
+
+        if not client:
+            await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            return
+
+        status = "✅ Активна" if client.is_active else "❌ Не оплачена"
+
+        text = (
+            f"👤 <b>Ваш профиль</b>\n\n"
+            f"<b>ID клиента:</b> <code>{client.id}</code>\n"
+            f"<b>Имя:</b> {escape(client.full_name or 'Не указано')}\n"
+            f"<b>Telegram:</b> @{escape(client.username or 'не указан')}</b>\n"
+            f"<b>Статус подписки:</b> {status}\n"
+            f"<b>Дата регистрации:</b> {client.created_at.strftime('%d.%m.%Y %H:%M')}"
+        )
+
+        await callback.message.answer(
+            text,
+            reply_markup=inline.back_to_menu_keyboard()
+        )
+
+    finally:
+        db.close()
+
+    await callback.answer()
+
+
+@router.callback_query(F.data == "help")
+async def cb_help(callback: CallbackQuery):
+    """Помощь"""
     text = (
-        "⚙️ <b>Настройки</b>\n\n"
-        "Здесь будут настройки бота.\n"
-        "Функционал в разработке..."
+        "❓ <b>Помощь</b>\n\n"
+        "<b>Как получить VPN:</b>\n"
+        "1. Нажмите <b>'💳 Оплатить подписку'</b>\n"
+        "2. Выберите тариф\n"
+        "3. Оплатите\n"
+        "4. Получите VPN ссылку\n\n"
+        "<b>Приложения для подключения:</b>\n"
+        "📱 <b>Hiddify</b> (iOS/Android)\n"
+        "📱 <b>Happ</b> (Android)\n\n"
+        "По всем вопросам обращайтесь к администратору."
     )
-    await message.answer(text, reply_markup=reply.back_keyboard())
 
-
-@router.message(F.text == "ℹ️ Помощь")
-async def menu_help(message: types.Message):
-    """Кнопка 'Помощь'"""
-    text = (
-        "📖 <b>Помощь</b>\n\n"
-        "Используйте кнопки меню для управления ботом.\n\n"
-        "Или команды:\n"
-        "/start - Главное меню\n"
-        "/help - Помощь\n"
-        "/me - Мой ID"
+    await callback.message.answer(
+        text,
+        reply_markup=inline.back_to_menu_keyboard()
     )
-    await message.answer(text, reply_markup=reply.back_keyboard())
+    await callback.answer()
 
 
-@router.message(F.text == "❌ Отмена")
-async def menu_cancel(message: types.Message, state: FSMContext):
-    """Кнопка 'Отмена'"""
+@router.callback_query(F.data == "cancel_payment")
+async def cb_cancel_payment(callback: CallbackQuery, state: FSMContext):
+    """Отмена оплаты"""
     await state.clear()
-    await message.answer(
-        "❌ Отменено.",
-        reply_markup=reply.main_menu_keyboard()
+    text = "❌ Оплата отменена.\n\nВыберите действие в главном меню."
+    await callback.message.edit_text(
+        text,
+        reply_markup=inline.back_to_menu_keyboard()
     )
+    await callback.answer()
 
 
-@router.message(F.text == "🔙 В главное меню")
-async def menu_back(message: types.Message, state: FSMContext):
-    """Кнопка 'Назад в меню'"""
-    await state.clear()
-    await message.answer(
-        "🔙 Главное меню",
-        reply_markup=reply.main_menu_keyboard()
-    )
+# Импорты в начале файла
+from aiogram.types import CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
