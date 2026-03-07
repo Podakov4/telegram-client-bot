@@ -24,6 +24,9 @@ WG_SERVER_IP = os.getenv('WG_SERVER_IP')
 WG_PORT = int(os.getenv('WG_PORT', 51820))
 WG_SUBNET = os.getenv('WG_SUBNET')
 
+VLESS_PORT = int(os.getenv('VLESS_PORT', 443))
+VLESS_PATH = os.getenv('VLESS_PATH', '/vless')
+
 # App
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'

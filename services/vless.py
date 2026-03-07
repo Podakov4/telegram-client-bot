@@ -10,7 +10,7 @@ class VLESSManager:
     def __init__(self, server_ip: str, port: int = 443,
                  path: str = "/vless", host: str = ""):
         self.server_ip = server_ip
-        self.port = port
+        self.port = port  # 🔥 Теперь 443
         self.path = path
         self.host = host or server_ip
 
@@ -46,8 +46,5 @@ class VLESSManager:
             uuid=client_uuid,
             remark=remark
         )
-
-        # TODO: Добавить клиента в /etc/xray/config.json
-        # Это требует перезагрузки Xray
 
         return client_uuid, vless_link

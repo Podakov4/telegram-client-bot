@@ -17,8 +17,8 @@ router = Router()
 # Инициализация VLESS менеджера
 vless_manager = VLESSManager(
     server_ip=config.WG_SERVER_IP,
-    port=config.WG_PORT,
-    path="/vless",
+    port=config.VLESS_PORT,
+    path=config.VLESS_PATH if hasattr(config, 'VLESS_PATH') else "/vless",
     host="freeth.ru"
 )
 
