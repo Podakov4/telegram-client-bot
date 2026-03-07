@@ -63,39 +63,38 @@ def get_xray_logs():
 
 def parse_traffic_from_logs(logs: str) -> dict:
     """
-    Распарсить трафик из логов
-    Возвращает: {'email': {'upload': bytes, 'download': bytes}}
+    Распарсить логи Xray
+    Считаем подключения и последнюю активность
     """
-    traffic_data = {}
+    client_data = {}
 
-    # Паттерн: email traffic: uplink=X downlink=Y
-    pattern = r'(\S+)\s+traffic:\s+uplink=(\d+)\s+downlink=(\d+)'
+    # Паттерн: email: client_X_name
+    pattern = r'email:\s+(\S+)'
 
     for match in re.finditer(pattern, logs):
-        email = match.group(1)
-        uplink = int(match.group(2))
-        downlink = int(match.group(3))
+        email = match.group(1).rstrip('_k').rstrip('_Test')  # Убираем суффиксы
 
-        if email not in traffic_data:
-            traffic_data[email] = {'upload': 0, 'download': 0}
+        if email not in client_data:
+            client_data[email] = {
+                'connections': 0,
+                'last_seen': datetime.utcnow()
+            }
 
-        # Накапливаем трафик
-        traffic_data[email]['upload'] += uplink
-        traffic_data[email]['download'] += downlink
+        client_data[email]['connections'] += 1
+        client_data[email]['last_seen'] = datetime.utcnow()
 
-    return traffic_data
+    return client_data
 
 
-def update_database(traffic_data: dict):
+def update_database(client_data: dict):
     """Обновить статистику в БД"""
     db = get_db_session()
 
     try:
         updated_count = 0
 
-        for email, stats in traffic_data.items():
-            # Ищем клиента по email (UUID в wireguard_public_key)
-            # Или по части email (client_X_name)
+        for email, data in client_data.items():
+            # Ищем клиента по email
             client = db.query(Client).filter(
                 func.lower(Client.full_name).contains(email.lower())
             ).first()
@@ -107,16 +106,21 @@ def update_database(traffic_data: dict):
                 ).first()
 
             if client:
-                # Обновляем трафик (накапливаем)
-                client.traffic_upload += stats['upload']
-                client.traffic_download += stats['download']
-                client.last_seen = datetime.utcnow()
-                client.connection_count += 1
+                # Обновляем статистику
+                client.last_seen = data['last_seen']
+                client.connection_count += data['connections']
+                client.is_online = True  # Считаем что онлайн если есть в логах
                 updated_count += 1
-                print(f"✅ {client.full_name}: ↑{stats['upload']} ↓{stats['download']}")
+                print(f"✅ {client.full_name}: +{data['connections']} подключений")
+            else:
+                print(f"⚠️  Клиент '{email}' не найден в БД")
 
         db.commit()
         print(f"\n🎉 Обновлено {updated_count} клиентов")
+
+        # Сбрасываем is_online для тех кто не был в логах
+        db.query(Client).update({Client.is_online: False})
+        db.commit()
 
     except Exception as e:
         print(f"❌ Ошибка обновления БД: {e}")
