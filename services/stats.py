@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta
 from typing import Optional
 import re
-
+from datetime import datetime, timezone
 
 class XrayStatsService:
     """Сервис для работы со статистикой"""
@@ -43,7 +43,7 @@ class XrayStatsService:
         """Проверка: клиент онлайн?"""
         if not last_seen:
             return False
-        return datetime.utcnow() - last_seen < timedelta(minutes=timeout_minutes)
+        return datetime.now(timezone.utc) - last_seen < timedelta(minutes=timeout_minutes)
 
     @staticmethod
     def parse_xray_log_line(line: str) -> Optional[dict]:

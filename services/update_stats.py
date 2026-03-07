@@ -8,7 +8,7 @@ import sys
 import os
 import subprocess
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 # 🔥 ВАЖНО: Добавляем корневую папку проекта в путь
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,11 +77,11 @@ def parse_traffic_from_logs(logs: str) -> dict:
         if email not in client_data:
             client_data[email] = {
                 'connections': 0,
-                'last_seen': datetime.utcnow()
+                'last_seen': datetime.now(timezone.utc)
             }
 
         client_data[email]['connections'] += 1
-        client_data[email]['last_seen'] = datetime.utcnow()
+        client_data[email]['last_seen'] = datetime.now(timezone.utc)
 
     return client_data
 
@@ -150,7 +150,7 @@ def update_database(client_data: dict):
 
 def main():
     print("🔄 Обновление статистики из логов Xray...")
-    print(f"⏰ Время: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
+    print(f"⏰ Время: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
 
     # Получаем логи
     logs = get_xray_logs()

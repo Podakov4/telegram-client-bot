@@ -1,7 +1,7 @@
 # database/models.py
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
@@ -19,8 +19,8 @@ class Client(Base):
     wireguard_public_key = Column(String, nullable=True)  # Теперь хранит UUID
     wireguard_config = Column(Text, nullable=True)  # Теперь хранит VLESS ссылку
     is_active = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
     last_seen = Column(DateTime, nullable=True)  # Последнее подключение
     is_online = Column(Boolean, default=False)  # Онлайн сейчас
     # Трафик (в байтах)
