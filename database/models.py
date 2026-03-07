@@ -21,3 +21,12 @@ class Client(Base):
     is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_seen = Column(DateTime, nullable=True)  # Последнее подключение
+    is_online = Column(Boolean, default=False)  # Онлайн сейчас
+    # Трафик (в байтах)
+    traffic_upload = Column(BigInteger, default=0)  # Отправлено
+    traffic_download = Column(BigInteger, default=0)  # Получено
+    # Подключения
+    connection_count = Column(Integer, default=0)  # Всего подключений
+    # Срок подписки
+    subscription_end = Column(DateTime, nullable=True)  # Дата окончания
