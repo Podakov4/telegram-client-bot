@@ -1,5 +1,5 @@
 # database/models.py
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, BigInteger
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 
