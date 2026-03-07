@@ -380,7 +380,7 @@ async def cb_profile(callback: CallbackQuery):
             f"👤 <b>Ваш профиль</b>\n\n"
             f"<b>ID клиента:</b> <code>{client.id}</code>\n"
             f"<b>Имя:</b> {escape(client.full_name or 'Не указано')}\n"
-            f"<b>Telegram:</b> @{escape(client.username or 'не указан')}</b>\n"
+            f"<b>Telegram:</b> @{escape(client.username or 'не указан')}\n"
             f"<b>Статус подписки:</b> {status}\n"
             f"<b>Дата регистрации:</b> {client.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
             f"Выберите действие:"
