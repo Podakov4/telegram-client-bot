@@ -1,9 +1,9 @@
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
-import json
 import logging
 from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +83,14 @@ class XrayStatsService:
             )
 
             if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
+                # Пытаемся распарсить как JSON
+                try:
+                    data = response.json()
+                except json.JSONDecodeError:
+                    # Если .json() не сработал, пробуем вручную
+                    data = json.loads(response.text)
+
+                if isinstance(data, dict) and data.get("success"):
                     obj = data.get("obj", {})
                     upload = obj.get("up", 0)
                     download = obj.get("down", 0)
@@ -121,26 +127,21 @@ class XrayStatsService:
             )
 
             if response.status_code == 200:
-                data = response.json()
+                # Пытаемся распарсить как JSON
+                try:
+                    data = response.json()
+                except json.JSONDecodeError:
+                    # Если .json() не сработал, пробуем вручную
+                    data = json.loads(response.text)
+
                 if isinstance(data, dict) and data.get("success"):
                     clients = []
                     for inbound in data.get("obj", []):
-                        # Получаем настройки в виде JSON строки
-                        settings_str = inbound.get("settings", "{}")
-
-                        # Парсим JSON строку в dict
-                        try:
-                            settings = json.loads(settings_str)
-                        except json.JSONDecodeError:
-                            logger.warning(f"Не удалось распарсить settings для inbound")
-                            continue
-
-                        # Получаем список клиентов
-                        if isinstance(settings, dict):
-                            for client in settings.get("clients", []):
-                                email = client.get("email")
-                                if email:
-                                    clients.append(email)
+                        settings = inbound.get("settings", {})
+                        for client in settings.get("clients", []):
+                            email = client.get("email")
+                            if email:
+                                clients.append(email)
 
                     logger.info(f"✅ Найдено {len(clients)} клиентов")
                     return clients
