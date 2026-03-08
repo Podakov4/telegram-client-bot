@@ -23,15 +23,17 @@ class XrayStatsService:
 
     def _get_api_url(self, endpoint: str) -> str:
         """Получить полный URL API"""
+        base = f"{self.panel_url}/panel/api/inbounds/"
         if self.web_base_path:
-            return f"{self.panel_url}/{self.web_base_path}/panel/api/inbounds/{endpoint}"
-        return f"{self.panel_url}/panel/api/inbounds/{endpoint}"
+            return f"{self.panel_url}/{self.web_base_path}{base}{endpoint}"
+        return f"{self.panel_url}{base}{endpoint}"
 
     def _get_login_url(self) -> str:
         """Получить URL для входа"""
+        base = f"{self.panel_url}/login"
         if self.web_base_path:
             return f"{self.panel_url}/{self.web_base_path}/login"
-        return f"{self.panel_url}/login"
+        return base
 
     def login(self) -> bool:
         """Авторизация в панели 3x-ui"""
