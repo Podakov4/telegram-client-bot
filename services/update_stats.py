@@ -14,11 +14,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
 from database import get_db_session, Client
-from services.stats import XrayStatsService  # ← Исправлено!
+from services.stats import XrayStatsService
 from sqlalchemy import func
 
-# Инициализация сервиса статистики
-stats_service = XrayStatsService()  # ← Исправлено!
+stats_service = XrayStatsService()
 
 
 def get_clients_from_xray() -> list:
@@ -131,7 +130,7 @@ def main():
 
     # Проверяем подключение к API
     print("🔍 Проверка подключения к Xray API...")
-    if not stats_service.test_connection():  # ← Исправлено!
+    if not stats_service.test_connection():
         print("❌ Не удалось подключиться к Xray API")
         print("💡 Проверьте что:")
         print("   • Xray запущен (sudo systemctl status xray)")
