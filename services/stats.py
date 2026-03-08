@@ -47,6 +47,7 @@ class XrayStatsService:
             if response.status_code == 200:
                 data = response.json()
                 if data.get("success"):
+                    # 🔥 ВАЖНО: cookie называется '3x-ui', не 'session'!
                     self.session_token = response.cookies.get("3x-ui")
                     if self.session_token:
                         logger.info("✅ Успешный вход в 3x-ui панель")
@@ -74,6 +75,7 @@ class XrayStatsService:
 
             api_url = self._get_api_url(f"getClientTraffics/{email}")
 
+            # 🔥 ВАЖНО: используем cookie '3x-ui'
             response = requests.get(
                 api_url,
                 cookies={"3x-ui": self.session_token} if self.session_token else None,
@@ -111,6 +113,7 @@ class XrayStatsService:
 
             api_url = self._get_api_url("list")
 
+            # 🔥 ВАЖНО: используем cookie '3x-ui'
             response = requests.get(
                 api_url,
                 cookies={"3x-ui": self.session_token} if self.session_token else None,
@@ -122,10 +125,10 @@ class XrayStatsService:
                 if isinstance(data, dict) and data.get("success"):
                     clients = []
                     for inbound in data.get("obj", []):
-                        # 🔥 ИСПРАВЛЕНИЕ: settings может быть строкой JSON
+                        # 🔥 settings может быть строкой JSON или dict
                         settings_raw = inbound.get("settings", "{}")
 
-                        # Парсим если это строка
+                        # Если это строка - парсим как JSON
                         if isinstance(settings_raw, str):
                             try:
                                 settings = json.loads(settings_raw)
