@@ -33,11 +33,10 @@ class XrayStatsService:
             return {"upload": 0, "download": 0, "total": 0}
 
         try:
-            # Импортируем готовые proto классы из xray-rpc
+            # Импортируем proto классы из xray-rpc
             from xray.api.stats_service_pb2 import GetStatsRequest
             from xray.api.stats_service_pb2_grpc import StatsServiceStub
 
-            # Создаём stub
             stub = StatsServiceStub(self.channel)
 
             # Запрос uplink
@@ -61,11 +60,14 @@ class XrayStatsService:
                 "download": download,
                 "total": upload + download
             }
-        except ImportError:
-            print("⚠️ xray-rpc не установлен, используем fallback")
+        except ImportError as e:
+            print(f"⚠️ Ошибка импорта xray-rpc: {e}")
+            return {"upload": 0, "download": 0, "total": 0}
+        except grpc.RpcError as e:
+            print(f"⚠️ gRPC ошибка: {e.code()} - {e.details()}")
             return {"upload": 0, "download": 0, "total": 0}
         except Exception as e:
-            print(f"❌ Ошибка получения статистики: {e}")
+            print(f"❌ Ошибка: {e}")
             return {"upload": 0, "download": 0, "total": 0}
         finally:
             self.close()
@@ -91,16 +93,19 @@ class XrayStatsService:
                 ]
             }
         except ImportError:
-            print("⚠️ xray-rpc не установлен")
+            print("⚠️ Ошибка импорта xray-rpc")
+            return {}
+        except grpc.RpcError as e:
+            print(f"⚠️ gRPC ошибка: {e.code()} - {e.details()}")
             return {}
         except Exception as e:
-            print(f"❌ Ошибка получения общей статистики: {e}")
+            print(f"❌ Ошибка: {e}")
             return {}
         finally:
             self.close()
 
     def test_connection(self) -> bool:
-        """Проверить подключение"""
+        """Проверить подключение через gRPC"""
         return self.connect()
 
     @staticmethod

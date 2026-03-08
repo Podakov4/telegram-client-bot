@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Скрипт для обновления статистики из Xray API (gRPC/HTTP)
-Запускается каждые 5 минут через cron
-"""
-
 import sys
 import os
 import re
