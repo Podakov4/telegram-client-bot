@@ -23,7 +23,7 @@ if response.status_code == 200 and response.json().get("success"):
     client_id = str(uuid.uuid4())
     print(f"🔑 Новый UUID: {client_id}")
 
-    # Данные для inbound
+    # Правильная структура - БЕЗ json.dumps()
     inbound_data = {
         "up": 0,
         "down": 0,
@@ -60,7 +60,7 @@ if response.status_code == 200 and response.json().get("success"):
             "enabled": True,
             "destOverride": ["http", "tls"]
         },
-        "tag": "vless-ws-443"
+        "tag": f"vless-ws-443-{client_id[:8]}"
     }
 
     # Добавляем inbound
@@ -75,13 +75,17 @@ if response.status_code == 200 and response.json().get("success"):
     print(f"\n📊 Response: {response.status_code}")
     print(json.dumps(response.json(), indent=2, ensure_ascii=False))
 
-    if response.status_code == 200 and response.json().get("success"):
-        print("\n✅ Inbound успешно добавлен!")
-        print(f" Email: client_3_podakov_k")
-        print(f"🔑 UUID: {client_id}")
-        print(f"🌐 Port: 443")
-        print(f"📡 Path: /vless")
+    if response.status_code == 200:
+        data = response.json()
+        if data.get("success"):
+            print("\n✅ Inbound успешно добавлен!")
+            print(f"📧 Email: client_3_podakov_k")
+            print(f"🔑 UUID: {client_id}")
+            print(f"🌐 Port: 443")
+            print(f"📡 Path: /vless")
+        else:
+            print(f"\n⚠️ Ответ API: {data.get('msg', 'Unknown')}")
     else:
-        print("\n❌ Ошибка добавления inbound")
+        print(f"\n❌ HTTP ошибка: {response.status_code}")
 else:
     print("❌ Ошибка входа")
