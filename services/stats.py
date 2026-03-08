@@ -22,7 +22,7 @@ class XrayStatsService:
         self.session_token = None
 
     def _get_api_url(self, endpoint: str) -> str:
-        """Получить полный URL API"""
+        """Получить полный URL API (без дублирования!)"""
         if self.web_base_path:
             return f"{self.panel_url}/{self.web_base_path}/panel/api/inbounds/{endpoint}"
         return f"{self.panel_url}/panel/api/inbounds/{endpoint}"
@@ -127,6 +127,7 @@ class XrayStatsService:
                     for inbound in data.get("obj", []):
                         settings_raw = inbound.get("settings", "{}")
 
+                        # Если settings — строка JSON, парсим вручную
                         if isinstance(settings_raw, str):
                             try:
                                 settings = json.loads(settings_raw)
