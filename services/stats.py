@@ -1,5 +1,5 @@
-# services/stats.py
 import requests
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 import logging
@@ -47,7 +47,7 @@ class XrayStatsService:
             if response.status_code == 200:
                 data = response.json()
                 if data.get("success"):
-                    # 🔥 ВАЖНО: cookie называется '3x-ui', не 'session'!
+                    # ВАЖНО: cookie называется '3x-ui', не 'session'!
                     self.session_token = response.cookies.get("3x-ui")
                     if self.session_token:
                         logger.info("✅ Успешный вход в 3x-ui панель")
@@ -75,7 +75,7 @@ class XrayStatsService:
 
             api_url = self._get_api_url(f"getClientTraffics/{email}")
 
-            # 🔥 ВАЖНО: используем cookie '3x-ui'
+            # ВАЖНО: используем cookie '3x-ui'
             response = requests.get(
                 api_url,
                 cookies={"3x-ui": self.session_token} if self.session_token else None,
@@ -83,8 +83,14 @@ class XrayStatsService:
             )
 
             if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
+                # Пытаемся распарсить как JSON
+                try:
+                    data = response.json()
+                except json.JSONDecodeError:
+                    # Если .json() не сработал, пробуем вручную
+                    data = json.loads(response.text)
+
+                if isinstance(data, dict) and data.get("success"):
                     obj = data.get("obj", {})
                     upload = obj.get("up", 0)
                     download = obj.get("down", 0)
@@ -113,7 +119,7 @@ class XrayStatsService:
 
             api_url = self._get_api_url("list")
 
-            # 🔥 ВАЖНО: используем cookie '3x-ui'
+            # ВАЖНО: используем cookie '3x-ui'
             response = requests.get(
                 api_url,
                 cookies={"3x-ui": self.session_token} if self.session_token else None,
@@ -121,8 +127,14 @@ class XrayStatsService:
             )
 
             if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
+                # Пытаемся распарсить как JSON
+                try:
+                    data = response.json()
+                except json.JSONDecodeError:
+                    # Если .json() не сработал, пробуем вручную
+                    data = json.loads(response.text)
+
+                if isinstance(data, dict) and data.get("success"):
                     clients = []
                     for inbound in data.get("obj", []):
                         settings = inbound.get("settings", {})
@@ -134,12 +146,12 @@ class XrayStatsService:
                     logger.info(f"✅ Найдено {len(clients)} клиентов")
                     return clients
 
-            logger.error(f"❌ Ошибка получения списка клиентов: {response.status_code}")
-            return []
-
         except Exception as e:
             logger.error(f"❌ Ошибка получения списка клиентов: {e}")
             return []
+
+        logger.error(f"❌ Ошибка получения списка клиентов: {response.status_code}")
+        return []
 
     def test_connection(self) -> bool:
         """Проверить подключение к панели"""
