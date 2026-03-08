@@ -2,8 +2,8 @@ import requests
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 import logging
-from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH
 import json
+from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -47,24 +47,38 @@ class XrayStatsService:
             if response.status_code == 200:
                 data = response.json()
                 if data.get("success"):
-                    # ВАЖНО: cookie называется '3x-ui', не 'session'!
                     self.session_token = response.cookies.get("3x-ui")
                     if self.session_token:
                         logger.info("✅ Успешный вход в 3x-ui панель")
                         return True
                     else:
                         logger.error("❌ Нет cookie '3x-ui' в ответе")
-                        logger.error(f"Все cookies: {dict(response.cookies)}")
                 else:
                     logger.error(f"❌ Ошибка входа: {data.get('msg', 'Unknown error')}")
             else:
                 logger.error(f"❌ HTTP ошибка: {response.status_code}")
-
             return False
 
         except Exception as e:
             logger.error(f"❌ Ошибка подключения к панели: {e}")
             return False
+
+    def _parse_json_response(self, response_text):
+        """Безопасная функция парсинга JSON"""
+        try:
+            # Если это уже объект dict — возвращаем как есть
+            if isinstance(response_text, dict):
+                return response_text
+            # Если это строка — пробуем распарсить
+            if isinstance(response_text, str):
+                try:
+                    return json.loads(response_text)
+                except json.JSONDecodeError:
+                    logger.warning(f"Не удалось распарсить JSON: {response_text[:200]}")
+                    return {}
+        except Exception as e:
+            logger.error(f"Ошибка парсинга JSON: {e}")
+        return {}
 
     def get_client_stats(self, email: str) -> dict:
         """Получить статистику клиента по email"""
@@ -75,7 +89,6 @@ class XrayStatsService:
 
             api_url = self._get_api_url(f"getClientTraffics/{email}")
 
-            # ВАЖНО: используем cookie '3x-ui'
             response = requests.get(
                 api_url,
                 cookies={"3x-ui": self.session_token} if self.session_token else None,
@@ -83,27 +96,18 @@ class XrayStatsService:
             )
 
             if response.status_code == 200:
-                # Пытаемся распарсить как JSON
-                try:
-                    data = response.json()
-                except json.JSONDecodeError:
-                    # Если .json() не сработал, пробуем вручную
-                    data = json.loads(response.text)
+                # Исправлено: используем нашу функцию парсинга
+                data = self._parse_json_response(response.text)
 
-                if isinstance(data, dict) and data.get("success"):
+                if data.get("success"):
                     obj = data.get("obj", {})
                     upload = obj.get("up", 0)
                     download = obj.get("down", 0)
 
                     logger.info(f"✅ Статистика для {email}: ↑{upload} ↓{download}")
 
-                    return {
-                        "upload": upload,
-                        "download": download,
-                        "total": upload + download
-                    }
+                    return {"upload": upload, "download": download, "total": upload + download}
 
-            logger.warning(f"⚠️ Не удалось получить статистику для {email}: {response.status_code}")
             return {"upload": 0, "download": 0, "total": 0}
 
         except Exception as e:
@@ -119,7 +123,6 @@ class XrayStatsService:
 
             api_url = self._get_api_url("list")
 
-            # ВАЖНО: используем cookie '3x-ui'
             response = requests.get(
                 api_url,
                 cookies={"3x-ui": self.session_token} if self.session_token else None,
@@ -127,26 +130,29 @@ class XrayStatsService:
             )
 
             if response.status_code == 200:
-                # Пытаемся распарсить как JSON
-                try:
-                    data = response.json()
-                except json.JSONDecodeError:
-                    # Если .json() не сработал, пробуем вручную
-                    data = json.loads(response.text)
+                # Исправлено: используем нашу функцию парсинга
+                data = self._parse_json_response(response.text)
 
-                if isinstance(data, dict) and data.get("success"):
+                if data.get("success"):
                     clients = []
                     for inbound in data.get("obj", []):
-                        settings = inbound.get("settings", {})
-                        for client in settings.get("clients", []):
-                            email = client.get("email")
-                            if email:
-                                clients.append(email)
+                        settings_str = inbound.get("settings", "{}")
+
+                        # Проверка: settings может быть строкой или dict
+                        if isinstance(settings_str, str):
+                            settings = json.loads(settings_str)
+                        else:
+                            settings = settings_str
+
+                        if isinstance(settings, dict):
+                            for client in settings.get("clients", []):
+                                email = client.get("email")
+                                if email:
+                                    clients.append(email)
 
                     logger.info(f"✅ Найдено {len(clients)} клиентов")
                     return clients
 
-            logger.error(f"❌ Ошибка получения списка клиентов: {response.status_code}")
             return []
 
         except Exception as e:
@@ -162,7 +168,6 @@ class XrayStatsService:
         """Форматирование байтов в человекочитаемый вид"""
         if bytes_num < 0:
             bytes_num = 0
-
         bytes_num = float(bytes_num)
         for unit in ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']:
             if bytes_num < 1024:
@@ -174,11 +179,9 @@ class XrayStatsService:
         """Проверка: клиент онлайн?"""
         if not last_seen:
             return False
-
         now = datetime.now(timezone.utc)
         if last_seen.tzinfo is None:
             last_seen = last_seen.replace(tzinfo=timezone.utc)
-
         return now - last_seen < timedelta(minutes=timeout_minutes)
 
 
