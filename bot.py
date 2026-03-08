@@ -1,4 +1,3 @@
-# bot.py
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
@@ -6,7 +5,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from database import create_tables
 
-# 🔥 Один импорт всех хендлеров
+# Один импорт всех хендлеров
 from handlers import common, client, menu
 import config
 
@@ -35,7 +34,7 @@ async def main():
     # Инициализация диспетчера
     dp = Dispatcher()
 
-    # 🔥 Регистрация роутеров (ОДИН РАЗ!)
+    # Регистрация роутеров (ОДИН РАЗ!)
     dp.include_router(common.router)
     dp.include_router(client.router)
     dp.include_router(menu.router)
