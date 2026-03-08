@@ -78,8 +78,15 @@ class XrayStatsService:
         return {}
 
     def test_connection(self) -> bool:
-        """Проверить подключение к API"""
-        return self.connect()
+        """Проверить подключение к API через gRPC"""
+        try:
+            channel = grpc.insecure_channel(self.api_url)
+            grpc.channel_ready_future(channel).result(timeout=5)
+            channel.close()
+            return True
+        except Exception as e:
+            print(f"⚠️ gRPC проверка: {e}")
+            return False
 
     @staticmethod
     def format_bytes(bytes_num: int) -> str:
