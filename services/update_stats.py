@@ -17,7 +17,7 @@ stats_service = XrayStatsService()
 XUI_CONFIG = {
     "panel_url": "http://72.56.118.169:2053",
     "username": "xCwgwlzm8x",
-    "password": "JOcBS87g30",
+    "password": "JOc8S87g30",
     "web_base_path": "YFBFh5UWZXQ7YxG6lt"
 }
 
