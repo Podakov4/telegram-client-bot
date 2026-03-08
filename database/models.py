@@ -14,7 +14,7 @@ class Client(Base):
     username = Column(String, nullable=True)
     full_name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
-    email = Column(String, nullable=True)
+    login = Column(String, nullable=True, unique=True, index=True)
     notes = Column(Text, nullable=True)
     wireguard_public_key = Column(String, nullable=True)  # Теперь хранит UUID
     wireguard_config = Column(Text, nullable=True)  # Теперь хранит VLESS ссылку
