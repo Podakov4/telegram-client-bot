@@ -30,6 +30,11 @@ VLESS_PATH = os.getenv('VLESS_PATH', '/vless')
 # App
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+# 3x-ui Panel Configuration
+XUI_PANEL_URL = os.getenv('XUI_PANEL_URL', 'http://127.0.0.1:2053')
+XUI_USERNAME = os.getenv('XUI_USERNAME', 'xCwgwlzm8x')
+XUI_PASSWORD = os.getenv('XUI_PASSWORD', 'JOc8S87g30')
+XUI_WEB_BASE_PATH = os.getenv('XUI_WEB_BASE_PATH', 'YFBFh5UWZXQ7YxG6lt')
 
 # Проверка что все переменные на месте
 if not BOT_TOKEN:

@@ -3,6 +3,7 @@ import requests
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
 import logging
+from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -10,14 +11,15 @@ logger = logging.getLogger(__name__)
 class XrayStatsService:
     """Сервис для получения статистики из 3x-ui через HTTP REST API"""
 
-    def __init__(self, panel_url: str = "http://127.0.0.1:2053",
-                 username: str = "admin",
-                 password: str = "admin",
-                 web_base_path: str = ""):
-        self.panel_url = panel_url.rstrip('/')
-        self.web_base_path = web_base_path.strip('/')
-        self.username = username
-        self.password = password
+    def __init__(self, panel_url: str = None,
+                 username: str = None,
+                 password: str = None,
+                 web_base_path: str = None):
+        # Используем значения из config если не переданы
+        self.panel_url = (panel_url or XUI_PANEL_URL).rstrip('/')
+        self.username = username or XUI_USERNAME
+        self.password = password or XUI_PASSWORD
+        self.web_base_path = (web_base_path or XUI_WEB_BASE_PATH).strip('/')
         self.session_token = None
 
     def _get_api_url(self, endpoint: str) -> str:
@@ -26,10 +28,18 @@ class XrayStatsService:
             return f"{self.panel_url}/{self.web_base_path}/panel/api/inbounds/{endpoint}"
         return f"{self.panel_url}/panel/api/inbounds/{endpoint}"
 
+    def _get_login_url(self) -> str:
+        """Получить URL для входа"""
+        if self.web_base_path:
+            return f"{self.panel_url}/{self.web_base_path}/login"
+        return f"{self.panel_url}/login"
+
     def login(self) -> bool:
         """Авторизация в панели 3x-ui"""
         try:
-            login_url = f"{self.panel_url}/{self.web_base_path}/login" if self.web_base_path else f"{self.panel_url}/login"
+            login_url = self._get_login_url()
+
+            logger.info(f"🔐 Попытка входа в {login_url}")
 
             response = requests.post(
                 login_url,
@@ -37,14 +47,25 @@ class XrayStatsService:
                 timeout=10
             )
 
+            logger.info(f"📥 Ответ сервера: {response.status_code}")
+
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"📄 Данные ответа: {data}")
+
                 if data.get("success"):
                     self.session_token = response.cookies.get("session")
-                    logger.info("✅ Успешный вход в 3x-ui панель")
-                    return True
+                    if self.session_token:
+                        logger.info("✅ Успешный вход в 3x-ui панель")
+                        return True
+                    else:
+                        logger.error("❌ Нет session cookie в ответе")
+                else:
+                    logger.error(f"❌ Ошибка входа: {data.get('msg', 'Unknown error')}")
+            else:
+                logger.error(f"❌ HTTP ошибка: {response.status_code}")
+                logger.error(f"📄 Ответ: {response.text}")
 
-            logger.error(f"❌ Ошибка входа: {response.status_code}")
             return False
 
         except Exception as e:
@@ -54,7 +75,7 @@ class XrayStatsService:
     def get_client_stats(self, email: str) -> dict:
         """Получить статистику клиента по email"""
         try:
-            # Сначала логинимся
+            # Сначала логинимся если нет токена
             if not self.session_token:
                 if not self.login():
                     return {"upload": 0, "download": 0, "total": 0}
@@ -74,6 +95,8 @@ class XrayStatsService:
                     obj = data.get("obj", {})
                     upload = obj.get("up", 0)
                     download = obj.get("down", 0)
+
+                    logger.info(f"✅ Статистика для {email}: ↑{upload} ↓{download}")
 
                     return {
                         "upload": upload,
@@ -113,6 +136,8 @@ class XrayStatsService:
                             email = client.get("email")
                             if email:
                                 clients.append(email)
+
+                    logger.info(f"✅ Найдено {len(clients)} клиентов")
                     return clients
 
             logger.error(f"❌ Ошибка получения списка клиентов: {response.status_code}")
@@ -124,6 +149,7 @@ class XrayStatsService:
 
     def test_connection(self) -> bool:
         """Проверить подключение к панели"""
+        logger.info("🔍 Проверка подключения к 3x-ui панели...")
         return self.login()
 
     @staticmethod
@@ -151,5 +177,5 @@ class XrayStatsService:
         return now - last_seen < timedelta(minutes=timeout_minutes)
 
 
-# Глобальный экземпляр (будет переопределён в update_stats.py)
+# Глобальный экземпляр с конфигурацией из config.py
 stats_service = XrayStatsService()
