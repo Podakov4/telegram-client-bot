@@ -1,118 +1,138 @@
 # services/stats.py
-import grpc
+import requests
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class XrayStatsService:
-    """Сервис для получения статистики из Xray API через gRPC"""
+    """Сервис для получения статистики из 3x-ui через HTTP REST API"""
 
-    def __init__(self, api_url: str = "127.0.0.1:10085"):
-        self.api_url = api_url
-        self.channel = None
+    def __init__(self, panel_url: str = "http://127.0.0.1:2053",
+                 username: str = "admin",
+                 password: str = "admin",
+                 web_base_path: str = ""):
+        self.panel_url = panel_url.rstrip('/')
+        self.web_base_path = web_base_path.strip('/')
+        self.username = username
+        self.password = password
+        self.session_token = None
 
-    def connect(self) -> bool:
-        """Подключение к gRPC серверу"""
+    def _get_api_url(self, endpoint: str) -> str:
+        """Получить полный URL API"""
+        if self.web_base_path:
+            return f"{self.panel_url}/{self.web_base_path}/panel/api/inbounds/{endpoint}"
+        return f"{self.panel_url}/panel/api/inbounds/{endpoint}"
+
+    def login(self) -> bool:
+        """Авторизация в панели 3x-ui"""
         try:
-            self.channel = grpc.insecure_channel(self.api_url)
-            grpc.channel_ready_future(self.channel).result(timeout=5)
-            return True
-        except Exception as e:
-            print(f"❌ Ошибка подключения: {e}")
+            login_url = f"{self.panel_url}/{self.web_base_path}/login" if self.web_base_path else f"{self.panel_url}/login"
+
+            response = requests.post(
+                login_url,
+                json={"username": self.username, "password": self.password},
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    self.session_token = response.cookies.get("session")
+                    logger.info("✅ Успешный вход в 3x-ui панель")
+                    return True
+
+            logger.error(f"❌ Ошибка входа: {response.status_code}")
             return False
 
-    def close(self):
-        """Закрытие соединения"""
-        if self.channel:
-            self.channel.close()
-            self.channel = None
+        except Exception as e:
+            logger.error(f"❌ Ошибка подключения к панели: {e}")
+            return False
 
     def get_client_stats(self, email: str) -> dict:
-        """Получить статистику по клиенту через gRPC"""
-        if not self.connect():
-            return {"upload": 0, "download": 0, "total": 0}
-
+        """Получить статистику клиента по email"""
         try:
-            # Импортируем proto классы из xray-rpc
-            from xray.api.stats_service_pb2 import GetStatsRequest
-            from xray.api.stats_service_pb2_grpc import StatsServiceStub
+            # Сначала логинимся
+            if not self.session_token:
+                if not self.login():
+                    return {"upload": 0, "download": 0, "total": 0}
 
-            stub = StatsServiceStub(self.channel)
+            # Получаем статистику клиента
+            api_url = self._get_api_url(f"getClientTraffics/{email}")
 
-            # Запрос uplink
-            uplink_req = GetStatsRequest(
-                name=f"user>>>{email}>>>traffic>>>uplink",
-                reset=False
+            response = requests.get(
+                api_url,
+                cookies={"session": self.session_token} if self.session_token else None,
+                timeout=10
             )
-            uplink_resp = stub.GetStats(uplink_req)
-            upload = uplink_resp.stat.value if uplink_resp.stat else 0
 
-            # Запрос downlink
-            downlink_req = GetStatsRequest(
-                name=f"user>>>{email}>>>traffic>>>downlink",
-                reset=False
-            )
-            downlink_resp = stub.GetStats(downlink_req)
-            download = downlink_resp.stat.value if downlink_resp.stat else 0
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    obj = data.get("obj", {})
+                    upload = obj.get("up", 0)
+                    download = obj.get("down", 0)
 
-            return {
-                "upload": upload,
-                "download": download,
-                "total": upload + download
-            }
-        except ImportError as e:
-            print(f"⚠️ Ошибка импорта xray-rpc: {e}")
+                    return {
+                        "upload": upload,
+                        "download": download,
+                        "total": upload + download
+                    }
+
+            logger.warning(f"⚠️ Не удалось получить статистику для {email}: {response.status_code}")
             return {"upload": 0, "download": 0, "total": 0}
-        except grpc.RpcError as e:
-            print(f"⚠️ gRPC ошибка: {e.code()} - {e.details()}")
-            return {"upload": 0, "download": 0, "total": 0}
+
         except Exception as e:
-            print(f"❌ Ошибка: {e}")
+            logger.error(f"❌ Ошибка получения статистики клиента {email}: {e}")
             return {"upload": 0, "download": 0, "total": 0}
-        finally:
-            self.close()
 
-    def get_all_stats(self) -> dict:
-        """Получить общую статистику через gRPC"""
-        if not self.connect():
-            return {}
-
+    def get_all_clients(self) -> list:
+        """Получить список всех клиентов"""
         try:
-            from xray.api.stats_service_pb2 import QueryStatsRequest
-            from xray.api.stats_service_pb2_grpc import StatsServiceStub
+            if not self.session_token:
+                if not self.login():
+                    return []
 
-            stub = StatsServiceStub(self.channel)
+            api_url = self._get_api_url("list")
 
-            req = QueryStatsRequest(pattern="user>>>", reset=False)
-            resp = stub.QueryStats(req)
+            response = requests.get(
+                api_url,
+                cookies={"session": self.session_token} if self.session_token else None,
+                timeout=10
+            )
 
-            return {
-                "stat": [
-                    {"name": stat.name, "value": stat.value}
-                    for stat in resp.stat
-                ]
-            }
-        except ImportError:
-            print("⚠️ Ошибка импорта xray-rpc")
-            return {}
-        except grpc.RpcError as e:
-            print(f"⚠️ gRPC ошибка: {e.code()} - {e.details()}")
-            return {}
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("success"):
+                    clients = []
+                    for inbound in data.get("obj", []):
+                        settings = inbound.get("settings", {})
+                        for client in settings.get("clients", []):
+                            email = client.get("email")
+                            if email:
+                                clients.append(email)
+                    return clients
+
+            logger.error(f"❌ Ошибка получения списка клиентов: {response.status_code}")
+            return []
+
         except Exception as e:
-            print(f"❌ Ошибка: {e}")
-            return {}
-        finally:
-            self.close()
+            logger.error(f"❌ Ошибка получения списка клиентов: {e}")
+            return []
 
     def test_connection(self) -> bool:
-        """Проверить подключение через gRPC"""
-        return self.connect()
+        """Проверить подключение к панели"""
+        return self.login()
 
     @staticmethod
     def format_bytes(bytes_num: int) -> str:
-        """Форматирование байтов"""
+        """Форматирование байтов в человекочитаемый вид"""
         if bytes_num < 0:
             bytes_num = 0
+
+        bytes_num = float(bytes_num)
         for unit in ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']:
             if bytes_num < 1024:
                 return f"{bytes_num:.2f} {unit}"
@@ -123,11 +143,13 @@ class XrayStatsService:
         """Проверка: клиент онлайн?"""
         if not last_seen:
             return False
+
         now = datetime.now(timezone.utc)
         if last_seen.tzinfo is None:
             last_seen = last_seen.replace(tzinfo=timezone.utc)
+
         return now - last_seen < timedelta(minutes=timeout_minutes)
 
 
-# Глобальный экземпляр
+# Глобальный экземпляр (будет переопределён в update_stats.py)
 stats_service = XrayStatsService()

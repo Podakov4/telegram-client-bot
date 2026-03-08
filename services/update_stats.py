@@ -13,6 +13,22 @@ from sqlalchemy import func
 
 stats_service = XrayStatsService()
 
+# Конфигурация 3x-ui панели
+XUI_CONFIG = {
+    "panel_url": "http://72.56.118.169:2053",
+    "username": "xCwgwlzm8x",
+    "password": "JOcBS87g30",
+    "web_base_path": "YFBFh5UWZXQ7YxG6lt"
+}
+
+# Инициализация сервиса статистики
+stats_service = XrayStatsService(
+    panel_url=XUI_CONFIG["panel_url"],
+    username=XUI_CONFIG["username"],
+    password=XUI_CONFIG["password"],
+    web_base_path=XUI_CONFIG["web_base_path"]
+)
+
 
 def get_clients_from_xray() -> list:
     """Получить список всех клиентов из Xray API"""
