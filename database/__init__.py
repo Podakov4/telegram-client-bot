@@ -1,13 +1,11 @@
-# database/__init__.py
-from .db import get_db, create_tables, get_db_session, engine, SessionLocal
-from .models import Client, Base
+from .db import Base, engine, AsyncSessionLocal, get_db, create_tables
+from .models import Client
 
 __all__ = [
-    'get_db',
-    'create_tables',
-    'get_db_session',
-    'engine',
-    'SessionLocal',
-    'Client',
-    'Base',
+    "Base",
+    "engine",
+    "AsyncSessionLocal",
+    "get_db",
+    "create_tables",
+    "Client",
 ]
