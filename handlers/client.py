@@ -2,12 +2,12 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
 from sqlalchemy import select
-from config import ADMIN_IDS
-from services.payments import mark_client_paid, mark_client_unpaid
 
+from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
 from database.models import Client
 from services.client_access import create_vpn_access_for_client
+from services.payments import mark_client_paid, mark_client_unpaid
 
 router = Router()
 
@@ -36,7 +36,7 @@ def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
         return (
             "У вас пока нет ссылки подписки.\n"
-            "Нажмите /create_access чтобы создать доступ."
+            "Дождитесь подтверждения оплаты администратором."
         )
 
     return (
@@ -82,22 +82,65 @@ async def cmd_subscription(message: Message):
 
 @router.message(Command("create_access"))
 async def cmd_create_access(message: Message):
-    telegram_id = str(message.from_user.id)
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
 
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: /create_access <telegram_id>")
+        return
+
+    telegram_id = parts[1]
     ok = await create_vpn_access_for_client(telegram_id)
 
     if not ok:
-        await message.answer("Не удалось создать доступ. Проверь настройки 3x-ui.")
+        await message.answer("Не удалось создать доступ.")
         return
 
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        client = result.scalar_one_or_none()
+    await message.answer(f"Доступ создан для {telegram_id}.")
 
-    await message.answer("Доступ создан.")
-    await message.answer(format_subscription_text(client))
+
+@router.message(Command("pay"))
+async def cmd_pay(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: /pay <telegram_id>")
+        return
+
+    telegram_id = parts[1]
+    ok = await mark_client_paid(telegram_id)
+
+    if not ok:
+        await message.answer("Клиент не найден.")
+        return
+
+    await message.answer(f"Оплата подтверждена для {telegram_id}.")
+
+
+@router.message(Command("unpay"))
+async def cmd_unpay(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: /unpay <telegram_id>")
+        return
+
+    telegram_id = parts[1]
+    ok = await mark_client_unpaid(telegram_id)
+
+    if not ok:
+        await message.answer("Клиент не найден.")
+        return
+
+    await message.answer(f"Подписка отключена для {telegram_id}.")
 
 
 @router.callback_query(F.data == "my_profile")
@@ -145,48 +188,10 @@ async def cb_help(callback: CallbackQuery):
         "/start — регистрация\n"
         "/menu — меню\n"
         "/profile — профиль\n"
-        "/subscription — ссылка подписки\n"
-        "/create_access — создать VPN-доступ"
+        "/subscription — ссылка подписки\n\n"
+        "Админ-команды:\n"
+        "/pay <telegram_id>\n"
+        "/unpay <telegram_id>\n"
+        "/create_access <telegram_id>"
     )
     await callback.answer()
-
-@router.message(Command("pay"))
-async def cmd_pay(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Использование: /pay <telegram_id>")
-        return
-
-    telegram_id = parts[1]
-    ok = await mark_client_paid(telegram_id)
-
-    if not ok:
-        await message.answer("Клиент не найден.")
-        return
-
-    await message.answer(f"Оплата подтверждена для {telegram_id}.")
-
-
-@router.message(Command("unpay"))
-async def cmd_unpay(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Использование: /unpay <telegram_id>")
-        return
-
-    telegram_id = parts[1]
-    ok = await mark_client_unpaid(telegram_id)
-
-    if not ok:
-        await message.answer("Клиент не найден.")
-        return
-
-    await message.answer(f"Подписка отключена для {telegram_id}.")

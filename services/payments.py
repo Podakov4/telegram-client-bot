@@ -49,4 +49,5 @@ async def mark_client_unpaid(telegram_id: str) -> bool:
         client.updated_at = datetime.utcnow()
 
         await session.commit()
-        return True
+
+    return True
