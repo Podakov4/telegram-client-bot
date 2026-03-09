@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Optional, Tuple
 from datetime import datetime, timedelta, timezone
-from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH, VLESS_PORT, VLESS_PATH
+from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH, VLESS_PORT, VLESS_PATH, VLESS_DOMAIN
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +49,9 @@ class VLESSManager:
                 data = response.json()
                 if data.get("success"):
                     self.session_token = response.cookies.get("3x-ui")
-                    logger.info("✅ Авторизация успешна!")
-                    return True
+                    if self.session_token:  # ✅ Проверка что токен получен
+                        logger.info("✅ Авторизация успешна!")
+                        return True
 
             logger.error(f"❌ Ошибка входа: {response.status_code}")
             return False
@@ -146,22 +147,21 @@ class VLESSManager:
                 logger.error(f"❌ Ошибка добавления клиента: {result.get('msg')}")
                 return "", ""
 
-            # Генерируем VLESS ссылку ПО ОБРАЗЦУ ИЗ ПАНЕЛИ
-            domain = "freeth.ru"
+            # ✅ Генерируем VLESS ссылку с использованием config.VLESS_DOMAIN
+            domain = VLESS_DOMAIN if VLESS_DOMAIN else "freeth.ru"
             path = VLESS_PATH.lstrip("/")
 
-            # Параметры согласно ВАШЕМУ образцу ссылки из панели:
+            # Параметры согласно образцу из панели:
             params = [
                 f"type=ws",
                 f"encryption=none",
-                f"path=%2F{path}",  # URL encoded
+                f"path=%2F{path}",
                 f"host={domain}",
-                f"sni={domain}",  # ⚠️ ДОБАВИЛ это важно для TLS
-                "security=none"  # Как в вашем образце из панели
+                f"sni={domain}",
+                "security=none"
             ]
 
             query_string = "&".join(params)
-            # Включаем порт из конфига - правильный!
             vless_link = f"vless://{client_uuid}@{domain}:{VLESS_PORT}?{query_string}#{full_name.replace(' ', '_')}"
 
             logger.info(f"🔗 Сгенерирована ссылка: {vless_link}")
@@ -175,12 +175,10 @@ class VLESSManager:
 
     def update_client_traffic(self, email: str, upload: int = 0, download: int = 0):
         """Обновить трафик клиента"""
-        # TODO: Реализовать обновление трафика через API
         pass
 
     def get_client_stats(self, email: str) -> dict:
         """Получить статистику клиента"""
-        # TODO: Реализовать получение статистики
         return {"upload": 0, "download": 0, "total": 0}
 
 
