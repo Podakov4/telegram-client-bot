@@ -128,7 +128,7 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
         if client_obj:
             status_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
             text = (
-                f"👋 <b>С возвращением, {callback.from_user.full_name or 'пользователь')}!</b>\n\n"
+                f"👋 <b>С возвращением, {callback.from_user.full_name or 'пользователь'}!</b>\n\n"
                 f"<b>Статус подписки:</b>{status_text}\n"
                 f"<b>ID клиента:</b><code>{client_obj.id}</code>\n\n"
                 f"Выберите действие:"
