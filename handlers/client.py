@@ -34,60 +34,27 @@ def format_profile_text(client: Client) -> str:
     )
 
 
+def format_subscription_text(client: Client) -> str:
+    if not client.subscription_link:
+        if client.is_paid:
+            return (
+                "Оплата отмечена, но ссылка еще не создана.\n"
+                "Нажмите «➕ Создать доступ» или попробуйте позже."
+            )
+        return "У вас пока нет ссылки подписки.\nНажмите «Запросить доступ»."
+
+    return (
+        "Подписка готова.\n\n"
+        "Нажмите «Показать ссылку», чтобы скопировать конфиг."
+    )
+
+
 def subscription_actions_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Показать ссылку", callback_data="show_vless_link")
-    builder.button(text="Показать QR", callback_data="show_vless_qr")
     builder.adjust(1)
     return builder.as_markup()
 
-
-async def get_client_by_telegram_id(telegram_id: str):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        return result.scalar_one_or_none()
-
-
-@router.message(Command("subscription"))
-@router.message(F.text == "Моя подписка")
-async def cmd_subscription(message: Message):
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-
-    if client is None:
-        await message.answer("Профиль не найден. Нажмите /start")
-        return
-
-    if not client.subscription_link:
-        await message.answer(
-            "У вас пока нет ссылки подписки.",
-            reply_markup=main_reply_keyboard(message.from_user.id),
-        )
-        return
-
-    await message.answer(
-        "Подписка готова. Выберите действие:",
-        reply_markup=subscription_actions_keyboard(),
-    )
-
-
-@router.callback_query(F.data == "show_vless_link")
-async def cb_show_vless_link(callback: CallbackQuery):
-    client = await get_client_by_telegram_id(str(callback.from_user.id))
-
-    if client is None or not client.subscription_link:
-        await callback.message.answer("Ссылка подписки не найдена.")
-        await callback.answer()
-        return
-
-    await callback.message.answer(
-        "Ссылка для копирования:\n\n"
-        f"<code>{client.subscription_link}</code>",
-        parse_mode="HTML",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
-    )
-    await callback.answer()
 
 async def get_client_by_telegram_id(telegram_id: str):
     async with AsyncSessionLocal() as session:
@@ -130,7 +97,7 @@ async def cmd_subscription(message: Message):
 
     await message.answer(
         format_subscription_text(client),
-        reply_markup=subscription_actions_keyboard(client.subscription_link),
+        reply_markup=subscription_actions_keyboard(),
     )
 
 
@@ -217,8 +184,8 @@ async def create_access_me(message: Message):
 
     if client and client.subscription_link:
         await message.answer(
-            "Подписка готова. Выберите действие:",
-            reply_markup=subscription_actions_keyboard(client.subscription_link),
+            "Подписка готова. Нажмите кнопку ниже:",
+            reply_markup=subscription_actions_keyboard(),
         )
     else:
         await message.answer(
