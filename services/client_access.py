@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import logging
+import re
 
 from sqlalchemy import select
 
@@ -8,6 +9,14 @@ from database.models import Client
 from services.vless import VLESSManager
 
 logger = logging.getLogger(__name__)
+
+
+def make_xui_email(telegram_id: str, full_name: str | None, fallback_id: int) -> str:
+    base_name = (full_name or f"user_{fallback_id}").lower().strip()
+    base_name = base_name.replace(" ", "_")
+    base_name = re.sub(r"[^a-zA-Z0-9_а-яА-ЯёЁ]", "", base_name)
+    base_name = base_name[:24] if base_name else f"user_{fallback_id}"
+    return f"tg_{telegram_id}_{base_name}"
 
 
 async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
@@ -55,7 +64,11 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
             logger.info("Client already has access telegram_id=%s", telegram_id)
             return True
 
-        xui_email = client.login or f"user_{client.id}"
+        xui_email = client.login or make_xui_email(
+            telegram_id=client.telegram_id,
+            full_name=client.full_name,
+            fallback_id=client.id,
+        )
         logger.info("Using xui_email=%s for telegram_id=%s", xui_email, telegram_id)
 
         manager = VLESSManager()
