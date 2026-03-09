@@ -20,10 +20,7 @@ vless_manager = VLESSManager(
     panel_url=config.XUI_PANEL_URL,
     username=config.XUI_USERNAME,
     password=config.XUI_PASSWORD,
-    web_base_path=config.XUI_WEB_BASE_PATH,
-    port=10443,
-    path="/vless",
-    host="freeth.ru"
+    web_base_path=config.XUI_WEB_BASE_PATH
 )
 
 
