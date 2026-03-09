@@ -15,6 +15,7 @@ BOT_TOKEN = get_env("BOT_TOKEN", required=True)
 DATABASE_URL = get_env("DATABASE_URL", required=True)
 
 XUI_BASE_URL = get_env("XUI_BASE_URL", required=True).rstrip("/")
+XUI_WEB_BASE_PATH = get_env("XUI_WEB_BASE_PATH", "").strip("/")
 XUI_USERNAME = get_env("XUI_USERNAME", required=True)
 XUI_PASSWORD = get_env("XUI_PASSWORD", required=True)
 

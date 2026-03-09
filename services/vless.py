@@ -10,6 +10,7 @@ import requests
 
 from config import (
     XUI_BASE_URL,
+    XUI_WEB_BASE_PATH,
     XUI_USERNAME,
     XUI_PASSWORD,
     VLESS_DOMAIN,
@@ -35,9 +36,14 @@ class VLESSManager:
         self.password = password or XUI_PASSWORD
         self.session = requests.Session()
 
+    def _join_url(self, path: str) -> str:
+        base = self.panel_url.rstrip("/")
+        prefix = f"/{XUI_WEB_BASE_PATH}" if XUI_WEB_BASE_PATH else ""
+        return f"{base}{prefix}{path}"
+
     def login(self) -> bool:
         try:
-            login_url = f"{self.panel_url}/login"
+            login_url = self._join_url("/login")
 
             response = self.session.post(
                 login_url,
@@ -66,7 +72,7 @@ class VLESSManager:
             return False
 
     def _api_url(self, path: str) -> str:
-        return f"{self.panel_url}/panel/api/inbounds/{path}"
+        return self._join_url(f"/panel/api/inbounds/{path}")
 
     def find_inbound_by_port(self, port: int) -> Optional[int]:
         try:
