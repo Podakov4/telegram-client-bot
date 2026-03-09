@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
+"""Конфигурация приложения VLESS Telegram Bot"""
 import os
 from dotenv import load_dotenv
 
-# Загрузка переменных из .env
 load_dotenv()
 
 # Telegram
@@ -17,13 +18,13 @@ if admin_ids_raw:
 else:
     ADMIN_IDS = []
 
-# VLESS Settings (Только это нужно!)
-VLESS_PORT = int(os.getenv('VLESS_PORT', '10443'))  # ✅ Правильный порт
+# VLESS Settings
+VLESS_PORT = int(os.getenv('VLESS_PORT', '10443'))
 VLESS_PATH = os.getenv('VLESS_PATH', '/vless')
 VLESS_DOMAIN = os.getenv('VLESS_DOMAIN', 'freeth.ru')
 
 # 3x-ui Panel Configuration
-XUI_PANEL_URL = os.getenv('XUI_PANEL_URL', 'http://72.56.118.169:2053')  # ✅ Реальный IP
+XUI_PANEL_URL = os.getenv('XUI_PANEL_URL', 'http://72.56.118.169:2053')
 XUI_USERNAME = os.getenv('XUI_USERNAME', 'xCwgwlzm8x')
 XUI_PASSWORD = os.getenv('XUI_PASSWORD', 'JOc8S87g30')
 XUI_WEB_BASE_PATH = os.getenv('XUI_WEB_BASE_PATH', 'YFBFh5UWZXQ7YxG6lt')
@@ -32,8 +33,10 @@ XUI_WEB_BASE_PATH = os.getenv('XUI_WEB_BASE_PATH', 'YFBFh5UWZXQ7YxG6lt')
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
 DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
-# Проверка что все переменные на месте
+# Проверка обязательных параметров
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не найден в .env!")
 if not DATABASE_URL:
     raise ValueError("❌ DATABASE_URL не найден в .env!")
+
+print(f"✅ Конфигурация загружена успешно")
