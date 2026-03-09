@@ -53,15 +53,14 @@ async def cmd_start(message: types.Message, state: FSMContext):
             # Клиент уже зарегистрирован
             await show_main_menu(message, existing_client)
         else:
-            # Новый клиент - регистрируем
             new_client = Client(
                 telegram_id=str(user_id),
                 username=username,
                 full_name=full_name,
                 phone=None,
-                email=None,
+                # email=None,   # ← ЭТОЙ СТРОКИ НЕТ
                 notes=None,
-                is_active=False  # Пока не активен до оплаты
+                is_active=False
             )
             db.add(new_client)
             db.commit()
@@ -676,13 +675,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 parse_mode="HTML"
             )
         else:
-            # Новый клиент - регистрируем
             new_client = Client(
                 telegram_id=str(user_id),
                 username=username,
                 full_name=full_name,
                 phone=None,
-                email=None,
+                # email=None,   # ← ЭТОЙ СТРОКИ НЕТ
                 notes=None,
                 is_active=False
             )
