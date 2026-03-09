@@ -46,9 +46,9 @@ async def cmd_start(message: types.Message, state: FSMContext):
         else:
             new_client = Client(
                 telegram_id=str(user_id),
-                username=username,
                 full_name=full_name,
-                phone=None,
+                login=None,
+                subscription_link=None,
                 notes=None,
                 is_active=False
             )
