@@ -17,9 +17,12 @@ stats_service = XrayStatsService()
 router = Router()
 
 vless_manager = VLESSManager(
-    server_ip=config.WG_SERVER_IP,
-    port=config.VLESS_PORT,
-    path=config.VLESS_PATH if hasattr(config, 'VLESS_PATH') else "/vless",
+    panel_url=XUI_PANEL_URL,
+    username=XUI_USERNAME,
+    password=XUI_PASSWORD,
+    web_base_path=XUI_WEB_BASE_PATH,
+    port=10443,
+    path="/vless",
     host="freeth.ru"
 )
 
