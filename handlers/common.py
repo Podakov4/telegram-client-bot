@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 stats_service = XrayStatsService()
 router = Router()
 
-# Инициализация менеджера VLESS (без лишних параметров)
+# Инициализация VLESS менеджера (только нужные параметры)
 vless_manager = VLESSManager(
     panel_url=config.XUI_PANEL_URL,
     username=config.XUI_USERNAME,
@@ -45,12 +45,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
         if existing_client:
             await show_main_menu(message, existing_client)
         else:
-            # Создаем нового клиента БЕЗ поля username (его нет в БД)
+            # Создаем клиента БЕЗ поля username (его нет в БД)
             new_client = Client(
                 telegram_id=str(user_id),
                 full_name=full_name,
                 login=None,
-                subscription_link=None,  # Вместо wireguard_config
+                subscription_link=None,
                 notes=None,
                 is_active=False
             )
@@ -73,10 +73,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
                 f"Выберите действие ниже 👇"
             )
 
-            await message.answer(
-                text,
-                reply_markup=inline.main_menu_keyboard()
-            )
+            await message.answer(text, reply_markup=inline.main_menu_keyboard())
 
             for admin_id in config.ADMIN_IDS:
                 try:
@@ -92,525 +89,202 @@ async def cmd_start(message: types.Message, state: FSMContext):
                     )
                 except:
                     pass
-
     finally:
         db.close()
 
 
 async def show_main_menu(message: types.Message, client_obj: Client):
-    """Показать главное меню"""
     status_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
     text = (
         f"👋 <b>С возвращением, {escape(client_obj.full_name or 'пользователь')}!</b>\n\n"
-        f"<b>Статус подписки:</b>{status_text}\n"
+        f"<b>Статус подписки:</b> {status_text}\n"
         f"<b>ID клиента:</b><code>{client_obj.id}</code>\n\n"
         f"Выберите действие:"
     )
-
-    await message.answer(
-        text,
-        reply_markup=inline.main_menu_keyboard()
-    )
+    await message.answer(text, reply_markup=inline.main_menu_keyboard())
 
 
 @router.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
-    """Кнопка главное меню"""
     await state.clear()
     user_id = callback.from_user.id
-
     db: Session = get_db_session()
     try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
+        client_obj = db.query(Client).filter(Client.telegram_id == str(user_id)).first()
         if client_obj:
             status_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
             text = (
                 f"👋 <b>С возвращением, {callback.from_user.full_name or 'пользователь'}!</b>\n\n"
-                f"<b>Статус подписки:</b>{status_text}\n"
+                f"<b>Статус подписки:</b> {status_text}\n"
                 f"<b>ID клиента:</b><code>{client_obj.id}</code>\n\n"
                 f"Выберите действие:"
             )
-            else:
-            text = (
-                f"👋 <b>Добро пожаловать!</b>\n\n"
-                f"Я бот для предоставления VPN доступа.\n\n"
-                f"Нажмите <b>'💳 Оплатить подписку'</b> чтобы начать"
-            )
+        else:
+            text = "👋 <b>Добро пожаловать!</b>\n\nНажмите <b>'💳 Оплатить подписку'</b> чтобы начать"
 
-            await callback.message.edit_text(
-                text,
-                reply_markup=inline.main_menu_keyboard(),
-                parse_mode="HTML"
-            )
-
+        await callback.message.edit_text(text, reply_markup=inline.main_menu_keyboard(), parse_mode="HTML")
     finally:
         db.close()
-
     await callback.answer()
 
 
 @router.callback_query(F.data == "pay_subscription")
 async def cb_pay_subscription(callback: CallbackQuery):
-    """Показать тарифы"""
     text = (
         "💳 Выберите тариф:\n\n"
-        f"1 месяц — 300₽\n"
-        f"📅 3 месяца — 800₽ (выгода 100₽)\n"
-        f"📅 12 месяцев — 3000₽ (выгода 600₽)\n\n"
-        f"После оплаты вы получите VPN ссылку для подключения"
+        "1 месяц — 300₽\n"
+        "📅 3 месяца — 800₽ (выгода 100₽)\n"
+        "📅 12 месяцев — 3000₽ (выгода 600₽)\n\n"
+        "После оплаты вы получите VPN ссылку."
     )
-    await callback.message.edit_text(
-        text,
-        reply_markup=inline.payment_keyboard()
-    )
+    await callback.message.edit_text(text, reply_markup=inline.payment_keyboard())
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("pay_"))
 async def cb_process_payment(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора тарифа"""
-    tariff = callback.data
-    tariff_names = {
-        "pay_300": "1 месяц (300₽)",
-        "pay_800": "3 месяца (800₽)",
-        "pay_3000": "12 месяцев (3000₽)"
-    }
-
-    tariff_name = tariff_names.get(tariff, "Неизвестный тариф")
+    tariff_names = {"pay_300": "1 месяц", "pay_800": "3 месяца", "pay_3000": "12 месяцев"}
+    tariff_name = tariff_names.get(callback.data, "Тариф")
 
     text = (
         f"💳 <b>Оплата: {tariff_name}</b>\n\n"
-        f"<b>Реквизиты для оплаты:</b>\n"
         f"📱 Карта: 0000 0000 0000 0000\n"
         f"👤 Получатель: ИП Иванов И.И.\n\n"
-        f"<b>Инструкция:</b>\n"
-        f"1. Переведите сумму на карту\n"
-        f"2. Отправьте чек в поддержку\n"
-        f"3. После проверки вы получите VPN доступ\n\n"
         f"<i>⚠️ В тестовом режиме нажмите '✅ Я оплатил' ниже</i>"
     )
-
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Я оплатил (тест)", callback_data="confirm_payment_test")
     builder.button(text="❌ Отмена", callback_data="main_menu")
 
-    await callback.message.edit_text(
-        text,
-        reply_markup=builder.as_markup()
-    )
-
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
     await state.set_state(Payment.waiting_for_payment)
     await callback.answer()
 
 
 @router.callback_query(F.data == "confirm_payment_test")
 async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
-    """Тестовое подтверждение оплаты"""
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
+        client_obj = db.query(Client).filter(Client.telegram_id == str(user_id)).first()
         if not client_obj:
             await callback.message.answer("❌ Ошибка. Нажмите /start")
             return
 
         client_obj.is_active = True
 
-        # Генерация email для панели
+        # Генерация email и добавление в Xray
         user_part = client_obj.login or str(user_id)
-        email_address = f"client_{client_obj.id}_{user_part}"
+        email_addr = f"client_{client_obj.id}_{user_part}"
 
-        # Добавление клиента в Xray
         client_uuid, vless_link = vless_manager.add_client_to_xray(
             client_id=client_obj.id,
             full_name=client_obj.full_name or f"User_{user_id}",
-            email=email_address
+            email=email_addr
         )
 
-        # СОХРАНЯЕМ ССЫЛКУ В ПРАВИЛЬНОЕ ПОЛЕ (subscription_link)
+        # Сохраняем ссылку в правильное поле (subscription_link)
         client_obj.subscription_link = vless_link
-        # Если нужно сохранить UUID отдельно, можно использовать login или notes,
-        # но в вашей модели нет отдельного поля для UUID, кроме login
         if not client_obj.login:
             client_obj.login = f"user_{client_obj.id}"
-
         db.commit()
 
         await callback.message.answer(
             f"✅ <b>Оплата подтверждена!</b>\n\n"
-            f"Ваша подписка активирована.\n\n"
-            f"🔗 <b>Ваша VPN ссылка (VLESS):</b>\n"
-            f"<code>{escape(vless_link)}</code>\n\n"
-            f"📱 <b>Для подключения:</b>\n"
-            f"1. Нажмите <b>'📋 Копировать ссылку'</b> ниже\n"
-            f"2. Откройте Hiddify или Happ\n"
-            f"3. Вставьте ссылку и подключайтесь!\n\n"
-            f"<i>Ссылку всегда можно получить через меню</i>",
+            f"🔗 <b>Ваша VPN ссылка:</b>\n<code>{escape(vless_link)}</code>\n\n"
+            f"📱 Скопируйте и вставьте в Hiddify/Happ.",
             reply_markup=inline.vpn_ready_keyboard()
         )
-
         await state.clear()
-
-        for admin_id in config.ADMIN_IDS:
-            try:
-                await callback.message.bot.send_message(
-                    admin_id,
-                    f"💰 <b>Новая оплата!</b>\n\n"
-                    f"<b>Клиент:</b>{escape(client_obj.full_name or 'Не указано')}\n"
-                    f"<b>ID:</b><code>{client_obj.id}</code>\n"
-                    f"<b>Telegram:</b>@{escape(client_obj.full_name or 'не указан')}\n"
-                    f"<b>UUID:</b><code>{client_uuid}</code>"
-                )
-            except:
-                pass
-
     finally:
         db.close()
-
     await callback.answer()
 
 
 @router.callback_query(F.data == "get_vpn")
 async def cb_get_vpn(callback: CallbackQuery):
-    """Получить VPN ссылку"""
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
+        client_obj = db.query(Client).filter(Client.telegram_id == str(user_id)).first()
         if not client_obj:
-            await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            await callback.message.answer("❌ Вы не зарегистрированы.")
             return
-
         if not client_obj.is_active:
-            text = (
-                "❌ <b>Подписка не оплачена</b>\n\n"
-                "Для получения доступа к VPN необходимо оплатить подписку.\n\n"
-                "Нажмите <b>'💳 Оплатить подписку'</b> в главном меню."
-            )
-            await callback.message.answer(
-                text,
-                reply_markup=inline.back_to_menu_keyboard()
-            )
-            await callback.answer()
+            await callback.message.answer("❌ Подписка не оплачена.", reply_markup=inline.back_to_menu_keyboard())
             return
-
-        # ПРОВЕРЯЕМ ПРАВИЛЬНОЕ ПОЛЕ (subscription_link)
         if not client_obj.subscription_link:
-            await callback.message.answer("❌ VPN ссылка не сгенерирована. Обратитесь к администратору.")
-            await callback.answer()
+            await callback.message.answer("❌ Ссылка не найдена.")
             return
 
-        text = (
-            f"🔗 <b>Ваша VPN ссылка (VLESS):</b>\n\n"
-            f"<code>{escape(client_obj.subscription_link)}</code>\n\n"
-            f"📱 <b>Для подключения:</b>\n"
-            f"1. Скачайте <b>Hiddify</b> или <b>Happ</b>\n"
-            f"2. Нажмите <b>'+'</b> и вставьте ссылку\n"
-            f"3. Подключайтесь!"
+        await callback.message.answer(
+            f"🔗 <b>Ваша ссылка:</b>\n<code>{escape(client_obj.subscription_link)}</code>"
         )
-
-        await callback.message.answer(text)
-
     finally:
         db.close()
-
     await callback.answer()
 
 
 @router.callback_query(F.data == "profile")
 async def cb_profile(callback: CallbackQuery):
-    """Показать профиль"""
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
+        client_obj = db.query(Client).filter(Client.telegram_id == str(user_id)).first()
         if not client_obj:
-            await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            await callback.message.answer("❌ Вы не зарегистрированы.")
             return
 
-        is_admin = user_id in config.ADMIN_IDS
         status = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
-
-        # Убрали обращение к client_obj.username, так как его нет в модели
         text = (
-            f"👤 <b>Ваш профиль</b>\n\n"
-            f"<b>ID клиента:</b><code>{client_obj.id}</code>\n"
-            f"<b>Имя:</b>{escape(client_obj.full_name or 'Не указано')}\n"
-            f"<b>Статус подписки:</b>{status}\n"
-            f"<b>Дата регистрации:</b>{client_obj.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-            f"Выберите действие:"
+            f"👤 <b>Профиль</b>\n\n"
+            f"<b>ID:</b> <code>{client_obj.id}</code>\n"
+            f"<b>Имя:</b> {escape(client_obj.full_name or '-')}\n"
+            f"<b>Статус:</b> {status}\n"
+            f"<b>Дата:</b> {client_obj.created_at.strftime('%d.%m.%Y')}"
         )
-
-        await callback.message.edit_text(
-            text,
-            reply_markup=inline.profile_menu_keyboard(is_admin),
-            parse_mode="HTML"
-        )
-
+        await callback.message.edit_text(text, reply_markup=inline.profile_menu_keyboard(user_id in config.ADMIN_IDS),
+                                         parse_mode="HTML")
     finally:
         db.close()
-
     await callback.answer()
 
 
 @router.callback_query(F.data == "my_stats")
 async def cb_my_stats(callback: CallbackQuery):
-    """Личная статистика пользователя"""
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
+        client_obj = db.query(Client).filter(Client.telegram_id == str(user_id)).first()
         if not client_obj:
-            await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
+            await callback.message.answer("❌ Вы не зарегистрированы.")
             return
 
-        # Проверка наличия полей перед использованием
-        is_online = stats_service.is_client_online(getattr(client_obj, 'last_seen', None))
-
-        if hasattr(client_obj, 'last_seen'):
-            client_obj.last_seen = datetime.now(timezone.utc)
-        if hasattr(client_obj, 'is_online'):
-            client_obj.is_online = is_online
-
-        db.commit()
-
-        subscription_text = ""
-        if getattr(client_obj, 'subscription_end', None):
-            days_left = (client_obj.subscription_end - datetime.now(timezone.utc)).days
-            subscription_text = f"✅ Активна ({days_left} дн. осталось)" if days_left > 0 else "❌ Истекла"
-        else:
-            subscription_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
-
+        # Безопасное обращение к полям, которых может не быть в старой БД
+        is_online = getattr(client_obj, 'is_online', False)
         traffic_up = getattr(client_obj, 'traffic_upload', 0) or 0
         traffic_down = getattr(client_obj, 'traffic_download', 0) or 0
-        conn_count = getattr(client_obj, 'connection_count', 0) or 0
 
         text = (
-            f"📊 <b>Ваша статистика</b>\n\n"
-            f"<b>Статус подписки:</b>{subscription_text}\n"
-            f"<b>Статус подключения:</b>{'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n"
-            f"<b>Последняя активность:</b>{client_obj.last_seen.strftime('%d.%m.%Y %H:%M') if client_obj.last_seen else 'Никогда'}\n\n"
-            f"<b>📈 Трафик:</b>\n"
-            f"• ⬆️ Загружено: {stats_service.format_bytes(traffic_up)}\n"
-            f"• ⬇️ Скачано: {stats_service.format_bytes(traffic_down)}\n"
-            f"• 🔄 Всего: {stats_service.format_bytes(traffic_up + traffic_down)}\n\n"
-            f"<b>🔗 Подключений:</b>{conn_count}\n\n"
-            f"<i>Статистика обновляется каждые 5 минут</i>"
+            f"📊 <b>Статистика</b>\n\n"
+            f"<b>Статус:</b> {'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n"
+            f"<b>Трафик:</b> ⬇️ {stats_service.format_bytes(traffic_down)} | ⬆️ {stats_service.format_bytes(traffic_up)}"
         )
-
-        await callback.message.answer(
-            text,
-            reply_markup=inline.back_to_menu_keyboard(),
-            parse_mode="HTML"
-        )
-
+        await callback.message.answer(text, reply_markup=inline.back_to_menu_keyboard(), parse_mode="HTML")
     finally:
         db.close()
-
-    await callback.answer()
-
-
-@router.callback_query(F.data == "server_stats")
-async def cb_server_stats(callback: CallbackQuery):
-    """Статистика сервера (только админ)"""
-    user_id = callback.from_user.id
-    if user_id not in config.ADMIN_IDS:
-        await callback.message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    db: Session = get_db_session()
-    try:
-        from sqlalchemy import func
-
-        total = db.query(Client).count()
-        active = db.query(Client).filter(Client.is_active == True).count()
-
-        # Используем getattr для безопасного доступа к полям, которых может не быть в старой БД
-        online = db.query(Client).filter(getattr(Client, 'is_online', False) == True).count()
-
-        # Проверка наличия ссылки в правильном поле
-        with_vpn = db.query(Client).filter(Client.subscription_link != None).count()
-
-        total_upload = db.query(func.sum(Client.traffic_upload)).scalar() or 0
-        total_download = db.query(func.sum(Client.traffic_download)).scalar() or 0
-
-        text = (
-            f"📊 <b>Статистика сервера</b>\n\n"
-            f"<b>👥 Клиенты:</b>\n"
-            f"• Всего: {total}\n"
-            f"• Активных (оплатили): {active}\n"
-            f"• Онлайн сейчас: {online}\n"
-            f"• С VPN: {with_vpn}\n\n"
-            f"<b>📈 Трафик:</b>\n"
-            f"• ⬆️ Загружено: {stats_service.format_bytes(total_upload)}\n"
-            f"• ⬇️ Скачано: {stats_service.format_bytes(total_download)}\n"
-            f"• 🔄 Всего: {stats_service.format_bytes(total_upload + total_download)}"
-        )
-
-        await callback.message.answer(
-            text,
-            reply_markup=inline.admin_stats_keyboard(),
-            parse_mode="HTML"
-        )
-
-    finally:
-        db.close()
-
     await callback.answer()
 
 
 @router.callback_query(F.data == "help")
 async def cb_help(callback: CallbackQuery):
-    """Помощь"""
-    text = (
-        "❓ Помощь\n\n"
-        "Как получить VPN:\n"
-        "1. Нажмите '💳 Оплатить подписку'\n"
-        "2. Выберите тариф\n"
-        "3. Оплатите\n"
-        "4. Получите VPN ссылку\n\n"
-        "Приложения для подключения:\n"
-        "📱 Hiddify (iOS/Android)\n"
-        "📱 Happ (Android)\n\n"
-        "По всем вопросам обращайтесь к администратору."
-    )
-    await callback.message.answer(
-        text,
-        reply_markup=inline.back_to_menu_keyboard()
-    )
+    await callback.message.answer("❓ Помощь:\n1. Оплата -> 2. Ссылка -> 3. Подключение.\nПриложения: Hiddify, Happ.",
+                                  reply_markup=inline.back_to_menu_keyboard())
     await callback.answer()
 
 
 @router.callback_query(F.data == "cancel_payment")
 async def cb_cancel_payment(callback: CallbackQuery, state: FSMContext):
-    """Отмена оплаты"""
     await state.clear()
-    text = "❌ Оплата отменена.\n\nВыберите действие в главном меню."
-    await callback.message.edit_text(
-        text,
-        reply_markup=inline.back_to_menu_keyboard()
-    )
+    await callback.message.edit_text("❌ Отменено.", reply_markup=inline.back_to_menu_keyboard())
     await callback.answer()
-
-
-@router.message(Command("my_stats"))
-async def cmd_my_stats(message: types.Message):
-    """Личная статистика пользователя (команда)"""
-    user_id = message.from_user.id
-    db: Session = get_db_session()
-    try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
-        if not client_obj:
-            await message.answer("❌ Вы не зарегистрированы. Нажмите /start")
-            return
-
-        is_online = stats_service.is_client_online(getattr(client_obj, 'last_seen', None))
-
-        if hasattr(client_obj, 'last_seen'):
-            client_obj.last_seen = datetime.now(timezone.utc)
-        if hasattr(client_obj, 'is_online'):
-            client_obj.is_online = is_online
-        db.commit()
-
-        subscription_text = ""
-        if getattr(client_obj, 'subscription_end', None):
-            days_left = (client_obj.subscription_end - datetime.now(timezone.utc)).days
-            subscription_text = f"✅ Активна ({days_left} дн. осталось)" if days_left > 0 else "❌ Истекла"
-        else:
-            subscription_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
-
-        traffic_up = getattr(client_obj, 'traffic_upload', 0) or 0
-        traffic_down = getattr(client_obj, 'traffic_download', 0) or 0
-        conn_count = getattr(client_obj, 'connection_count', 0) or 0
-
-        text = (
-            f"📊 <b>Ваша статистика</b>\n\n"
-            f"<b>Статус подписки:</b>{subscription_text}\n"
-            f"<b>Статус подключения:</b>{'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n"
-            f"<b>Последняя активность:</b>{client_obj.last_seen.strftime('%d.%m.%Y %H:%M') if client_obj.last_seen else 'Никогда'}\n\n"
-            f"<b>📈 Трафик:</b>\n"
-            f"• ⬆️ Загружено: {stats_service.format_bytes(traffic_up)}\n"
-            f"• ⬇️ Скачано: {stats_service.format_bytes(traffic_down)}\n"
-            f"• 🔄 Всего: {stats_service.format_bytes(traffic_up + traffic_down)}\n\n"
-            f"<b>🔗 Подключений:</b>{conn_count}\n\n"
-            f"<i>Статистика обновляется каждые 5 минут</i>"
-        )
-
-        await message.answer(text)
-
-    finally:
-        db.close()
-
-
-@router.callback_query(F.data.startswith("copy_vpn:"))
-async def cb_copy_vpn(callback: CallbackQuery):
-    """Копирование VPN ссылки"""
-    user_id = callback.from_user.id
-    vpn_link = callback.data.replace("copy_vpn:", "").strip()
-
-    db: Session = get_db_session()
-    try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
-        # Проверка через правильное поле subscription_link
-        if not client_obj or not client_obj.is_active or not client_obj.subscription_link:
-            await callback.message.answer("❌ У вас нет активной VPN ссылки")
-            await callback.answer()
-            return
-
-        await callback.message.answer(
-            f"<code>{escape(vpn_link)}</code>",
-            parse_mode="HTML"
-        )
-
-        await callback.answer("✅ Ссылка отправлена! Нажмите на неё чтобы скопировать", show_alert=True)
-
-    finally:
-        db.close()
-
-
-@router.callback_query(F.data == "copy_vpn_now")
-async def cb_copy_vpn_now(callback: CallbackQuery):
-    """Копирование VPN ссылки (после оплаты)"""
-    user_id = callback.from_user.id
-    db: Session = get_db_session()
-    try:
-        client_obj = db.query(Client).filter(
-            Client.telegram_id == str(user_id)
-        ).first()
-
-        # Проверка через правильное поле subscription_link
-        if not client_obj or not client_obj.subscription_link:
-            await callback.message.answer("❌ VPN ссылка недоступна")
-            await callback.answer()
-            return
-
-        await callback.message.answer(
-            f"<code>{escape(client_obj.subscription_link)}</code>",
-            parse_mode="HTML"
-        )
-
-        await callback.answer("✅ Ссылка отправлена! Нажмите на неё чтобы скопировать", show_alert=True)
-
-    finally:
-        db.close()
