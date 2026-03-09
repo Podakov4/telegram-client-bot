@@ -37,5 +37,5 @@ async def cmd_start(message: Message):
 
     await message.answer(
         "Добро пожаловать. Выберите действие в меню.",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=main_menu_keyboard(message.from_user.id),
     )

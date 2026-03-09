@@ -8,6 +8,7 @@ from database.db import AsyncSessionLocal
 from database.models import Client
 from services.client_access import create_vpn_access_for_client
 from services.payments import mark_client_paid, mark_client_unpaid
+from handlers.menu import main_menu_keyboard
 
 router = Router()
 
@@ -34,9 +35,14 @@ def format_profile_text(client: Client) -> str:
 
 def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
+        if client.is_paid:
+            return (
+                "Оплата отмечена, но ссылка еще не создана.\n"
+                "Нажмите «Моя подписка» чуть позже или создайте доступ кнопкой администратора."
+            )
         return (
             "У вас пока нет ссылки подписки.\n"
-            "Дождитесь подтверждения оплаты администратором."
+            "Нажмите «Запросить доступ»."
         )
 
     return (
@@ -46,15 +52,17 @@ def format_subscription_text(client: Client) -> str:
     )
 
 
-@router.message(Command("profile"))
-async def cmd_profile(message: Message):
-    telegram_id = str(message.from_user.id)
-
+async def get_client_by_telegram_id(telegram_id: str):
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.telegram_id == telegram_id)
         )
-        client = result.scalar_one_or_none()
+        return result.scalar_one_or_none()
+
+
+@router.message(Command("profile"))
+async def cmd_profile(message: Message):
+    client = await get_client_by_telegram_id(str(message.from_user.id))
 
     if client is None:
         await message.answer("Профиль не найден. Нажмите /start")
@@ -65,13 +73,7 @@ async def cmd_profile(message: Message):
 
 @router.message(Command("subscription"))
 async def cmd_subscription(message: Message):
-    telegram_id = str(message.from_user.id)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        client = result.scalar_one_or_none()
+    client = await get_client_by_telegram_id(str(message.from_user.id))
 
     if client is None:
         await message.answer("Профиль не найден. Нажмите /start")
@@ -80,78 +82,9 @@ async def cmd_subscription(message: Message):
     await message.answer(format_subscription_text(client))
 
 
-@router.message(Command("create_access"))
-async def cmd_create_access(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Использование: /create_access <telegram_id>")
-        return
-
-    telegram_id = parts[1]
-    ok = await create_vpn_access_for_client(telegram_id)
-
-    if not ok:
-        await message.answer("Не удалось создать доступ.")
-        return
-
-    await message.answer(f"Доступ создан для {telegram_id}.")
-
-
-@router.message(Command("pay"))
-async def cmd_pay(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Использование: /pay <telegram_id>")
-        return
-
-    telegram_id = parts[1]
-    ok = await mark_client_paid(telegram_id)
-
-    if not ok:
-        await message.answer("Клиент не найден.")
-        return
-
-    await message.answer(f"Оплата подтверждена для {telegram_id}.")
-
-
-@router.message(Command("unpay"))
-async def cmd_unpay(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        await message.answer("Использование: /unpay <telegram_id>")
-        return
-
-    telegram_id = parts[1]
-    ok = await mark_client_unpaid(telegram_id)
-
-    if not ok:
-        await message.answer("Клиент не найден.")
-        return
-
-    await message.answer(f"Подписка отключена для {telegram_id}.")
-
-
 @router.callback_query(F.data == "my_profile")
 async def cb_my_profile(callback: CallbackQuery):
-    telegram_id = str(callback.from_user.id)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        client = result.scalar_one_or_none()
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
 
     if client is None:
         await callback.message.answer("Профиль не найден. Нажмите /start")
@@ -164,13 +97,7 @@ async def cb_my_profile(callback: CallbackQuery):
 
 @router.callback_query(F.data == "my_subscription")
 async def cb_my_subscription(callback: CallbackQuery):
-    telegram_id = str(callback.from_user.id)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        client = result.scalar_one_or_none()
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
 
     if client is None:
         await callback.message.answer("Профиль не найден. Нажмите /start")
@@ -181,17 +108,82 @@ async def cb_my_subscription(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "request_access")
+async def cb_request_access(callback: CallbackQuery):
+    await callback.message.answer(
+        "Заявка на доступ отправлена.\n"
+        "После подтверждения оплаты администратором ссылка появится в разделе «Моя подписка».",
+        reply_markup=main_menu_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_pay_me")
+async def cb_admin_pay_me(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    telegram_id = str(callback.from_user.id)
+    ok = await mark_client_paid(telegram_id)
+
+    if not ok:
+        await callback.message.answer("Не удалось подтвердить оплату.")
+        await callback.answer()
+        return
+
+    await callback.message.answer("Оплата подтверждена.")
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data == "admin_create_access_me")
+async def cb_admin_create_access_me(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    telegram_id = str(callback.from_user.id)
+    ok = await create_vpn_access_for_client(telegram_id)
+
+    if not ok:
+        await callback.message.answer("Не удалось создать доступ в 3x-ui.")
+        await callback.answer()
+        return
+
+    client = await get_client_by_telegram_id(telegram_id)
+    await callback.message.answer("Доступ создан.")
+    await callback.message.answer(format_subscription_text(client))
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data == "admin_unpay_me")
+async def cb_admin_unpay_me(callback: CallbackQuery):
+    if callback.from_user.id not in ADMIN_IDS:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    telegram_id = str(callback.from_user.id)
+    ok = await mark_client_unpaid(telegram_id)
+
+    if not ok:
+        await callback.message.answer("Не удалось отключить подписку.")
+        await callback.answer()
+        return
+
+    await callback.message.answer("Подписка отключена.")
+    await callback.answer("Готово")
+
+
 @router.callback_query(F.data == "help")
 async def cb_help(callback: CallbackQuery):
     await callback.message.answer(
-        "Команды:\n"
-        "/start — регистрация\n"
-        "/menu — меню\n"
-        "/profile — профиль\n"
-        "/subscription — ссылка подписки\n\n"
-        "Админ-команды:\n"
-        "/pay <telegram_id>\n"
-        "/unpay <telegram_id>\n"
-        "/create_access <telegram_id>"
+        "Доступные действия:\n"
+        "• Мой профиль\n"
+        "• Моя подписка\n"
+        "• Запросить доступ\n\n"
+        "Для администратора также доступны:\n"
+        "• Подтвердить оплату\n"
+        "• Создать доступ\n"
+        "• Отключить подписку"
     )
     await callback.answer()
