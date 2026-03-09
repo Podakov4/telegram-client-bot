@@ -1,11 +1,12 @@
+#!/usr/bin/env python3
+"""Telegram Client Bot - Main Entry Point"""
+
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from database import create_tables
-
-# Один импорт всех хендлеров
 from handlers import common, client, menu
 import config
 
@@ -14,7 +15,7 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # 🔥 ИСПРАВЛЕНО
 
 
 async def main():
@@ -34,12 +35,12 @@ async def main():
     # Инициализация диспетчера
     dp = Dispatcher()
 
-    # Регистрация роутеров (ОДИН РАЗ!)
+    # Регистрация роутеров
     dp.include_router(common.router)
     dp.include_router(client.router)
     dp.include_router(menu.router)
 
-    # Удаление webhook при старте (если был)
+    # Удаление webhook при старте
     await bot.delete_webhook(drop_pending_updates=True)
 
     logger.info("✅ Бот запущен и готов к работе!")
@@ -49,7 +50,7 @@ async def main():
     await dp.start_polling(bot)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # 🔥 ИСПРАВЛЕНО
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
