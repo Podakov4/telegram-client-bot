@@ -10,7 +10,11 @@ def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton(text="Моя подписка"),
         ],
         [
-            KeyboardButton(text="Запросить доступ"),
+            KeyboardButton(text="Оплатить 1 месяц"),
+            KeyboardButton(text="Оплатить 3 месяца"),
+        ],
+        [
+            KeyboardButton(text="Оплатить 12 месяцев"),
             KeyboardButton(text="Помощь"),
         ],
     ]
@@ -18,12 +22,7 @@ def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if user_id in ADMIN_IDS:
         rows.append(
             [
-                KeyboardButton(text="✅ Подтвердить оплату"),
                 KeyboardButton(text="➕ Создать доступ"),
-            ]
-        )
-        rows.append(
-            [
                 KeyboardButton(text="⛔ Отключить подписку"),
             ]
         )

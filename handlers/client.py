@@ -9,7 +9,7 @@ from database.db import AsyncSessionLocal
 from database.models import Client
 from keyboards.reply import main_reply_keyboard
 from services.client_access import create_vpn_access_for_client
-from services.payments import mark_client_paid, mark_client_unpaid
+from services.payments import activate_subscription, deactivate_subscription
 
 router = Router()
 
@@ -36,12 +36,7 @@ def format_profile_text(client: Client) -> str:
 
 def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
-        if client.is_paid:
-            return (
-                "Оплата отмечена, но ссылка еще не создана.\n"
-                "Нажмите «➕ Создать доступ» или попробуйте позже."
-            )
-        return "У вас пока нет ссылки подписки.\nНажмите «Запросить доступ»."
+        return "У вас пока нет ссылки подписки.\nСначала оплатите подписку."
 
     return (
         "Подписка готова.\n\n"
@@ -119,13 +114,64 @@ async def cb_show_vless_link(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(F.text == "Запросить доступ")
-async def request_access(message: Message):
+@router.message(F.text == "Оплатить 1 месяц")
+async def pay_1_month(message: Message):
+    ok = await activate_subscription(str(message.from_user.id), months=1)
+    if not ok:
+        await message.answer("Не удалось активировать подписку.")
+        return
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
     await message.answer(
-        "Заявка на доступ отправлена.\n"
-        "После подтверждения оплаты и создания доступа ссылка появится в разделе «Моя подписка».",
+        "Подписка на 1 месяц активирована.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
+
+    if client and client.subscription_link:
+        await message.answer(
+            "Ссылка готова:",
+            reply_markup=subscription_actions_keyboard(),
+        )
+
+
+@router.message(F.text == "Оплатить 3 месяца")
+async def pay_3_months(message: Message):
+    ok = await activate_subscription(str(message.from_user.id), months=3)
+    if not ok:
+        await message.answer("Не удалось активировать подписку.")
+        return
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+    await message.answer(
+        "Подписка на 3 месяца активирована.",
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
+
+    if client and client.subscription_link:
+        await message.answer(
+            "Ссылка готова:",
+            reply_markup=subscription_actions_keyboard(),
+        )
+
+
+@router.message(F.text == "Оплатить 12 месяцев")
+async def pay_12_months(message: Message):
+    ok = await activate_subscription(str(message.from_user.id), months=12)
+    if not ok:
+        await message.answer("Не удалось активировать подписку.")
+        return
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+    await message.answer(
+        "Подписка на 12 месяцев активирована.",
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
+
+    if client and client.subscription_link:
+        await message.answer(
+            "Ссылка готова:",
+            reply_markup=subscription_actions_keyboard(),
+        )
 
 
 @router.message(F.text == "Помощь")
@@ -134,30 +180,10 @@ async def help_message(message: Message):
         "Доступные действия:\n"
         "• Мой профиль\n"
         "• Моя подписка\n"
-        "• Запросить доступ\n\n"
-        "Для администратора также доступны:\n"
-        "• ✅ Подтвердить оплату\n"
-        "• ➕ Создать доступ\n"
-        "• ⛔ Отключить подписку",
-        reply_markup=main_reply_keyboard(message.from_user.id),
-    )
-
-
-@router.message(F.text == "✅ Подтвердить оплату")
-async def pay_me(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    telegram_id = str(message.from_user.id)
-    ok = await mark_client_paid(telegram_id)
-
-    if not ok:
-        await message.answer("Не удалось подтвердить оплату.")
-        return
-
-    await message.answer(
-        "Оплата подтверждена.",
+        "• Оплатить 1 месяц\n"
+        "• Оплатить 3 месяца\n"
+        "• Оплатить 12 месяцев\n\n"
+        "После оплаты подписка активируется автоматически.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
 
@@ -175,23 +201,10 @@ async def create_access_me(message: Message):
         await message.answer("Не удалось создать доступ в 3x-ui.")
         return
 
-    client = await get_client_by_telegram_id(telegram_id)
-
     await message.answer(
         "Доступ создан.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
-
-    if client and client.subscription_link:
-        await message.answer(
-            "Подписка готова. Нажмите кнопку ниже:",
-            reply_markup=subscription_actions_keyboard(),
-        )
-    else:
-        await message.answer(
-            "Доступ создан, но ссылка пока не найдена в базе.",
-            reply_markup=main_reply_keyboard(message.from_user.id),
-        )
 
 
 @router.message(F.text == "⛔ Отключить подписку")
@@ -201,7 +214,7 @@ async def unpay_me(message: Message):
         return
 
     telegram_id = str(message.from_user.id)
-    ok = await mark_client_unpaid(telegram_id)
+    ok = await deactivate_subscription(telegram_id)
 
     if not ok:
         await message.answer("Не удалось отключить подписку.")

@@ -7,7 +7,17 @@ from database.models import Client
 from services.client_access import create_vpn_access_for_client
 
 
-async def mark_client_paid(telegram_id: str, days: int = 30) -> bool:
+def add_months_as_days(months: int) -> int:
+    if months == 1:
+        return 30
+    if months == 3:
+        return 90
+    if months == 12:
+        return 365
+    return months * 30
+
+
+async def activate_subscription(telegram_id: str, months: int) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.telegram_id == telegram_id)
@@ -18,6 +28,7 @@ async def mark_client_paid(telegram_id: str, days: int = 30) -> bool:
             return False
 
         now = datetime.utcnow()
+        days = add_months_as_days(months)
 
         if client.paid_until and client.paid_until > now:
             client.paid_until = client.paid_until + timedelta(days=days)
@@ -34,7 +45,7 @@ async def mark_client_paid(telegram_id: str, days: int = 30) -> bool:
     return True
 
 
-async def mark_client_unpaid(telegram_id: str) -> bool:
+async def deactivate_subscription(telegram_id: str) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.telegram_id == telegram_id)
