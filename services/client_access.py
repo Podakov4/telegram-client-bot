@@ -4,6 +4,8 @@ from sqlalchemy import select
 from database.db import AsyncSessionLocal
 from database.models import Client
 from services.vless import VLESSManager
+import logging
+logger = logging.getLogger(__name__)
 
 
 async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
