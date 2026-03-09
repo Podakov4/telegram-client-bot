@@ -1,42 +1,36 @@
-# keyboards/reply.py
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
+from config import ADMIN_IDS
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Главное меню (кнопки внизу экрана)"""
-    keyboard = [
-        [KeyboardButton(text="➕ Добавить клиента")],
-        [KeyboardButton(text="📋 Список клиентов")],
-        [KeyboardButton(text="📊 Статистика", ), KeyboardButton(text="⚙️ Настройки")],
-        [KeyboardButton(text="ℹ️ Помощь")]
+
+def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+    rows = [
+        [
+            KeyboardButton(text="Мой профиль"),
+            KeyboardButton(text="Моя подписка"),
+        ],
+        [
+            KeyboardButton(text="Запросить доступ"),
+            KeyboardButton(text="Помощь"),
+        ],
     ]
 
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,  # Автоматически подстраивать размер
-        one_time_keyboard=False  # Не скрывать после нажатия
-    )
+    if user_id in ADMIN_IDS:
+        rows.append(
+            [
+                KeyboardButton(text="✅ Подтвердить оплату"),
+                KeyboardButton(text="➕ Создать доступ"),
+            ]
+        )
+        rows.append(
+            [
+                KeyboardButton(text="⛔ Отключить подписку"),
+            ]
+        )
 
-
-def cancel_keyboard() -> ReplyKeyboardMarkup:
-    """Кнопка отмены"""
-    keyboard = [
-        [KeyboardButton(text="❌ Отмена")]
-    ]
     return ReplyKeyboardMarkup(
-        keyboard=keyboard,
+        keyboard=rows,
         resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-
-def back_keyboard() -> ReplyKeyboardMarkup:
-    """Кнопка назад"""
-    keyboard = [
-        [KeyboardButton(text="🔙 В главное меню")]
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=True
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите действие",
     )

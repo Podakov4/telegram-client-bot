@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from database.db import AsyncSessionLocal
 from database.models import Client
-from handlers.menu import main_menu_keyboard
+from keyboards.reply import main_reply_keyboard
 
 router = Router()
 
@@ -37,5 +37,5 @@ async def cmd_start(message: Message):
 
     await message.answer(
         "Добро пожаловать. Выберите действие в меню.",
-        reply_markup=main_menu_keyboard(message.from_user.id),
+        reply_markup=main_reply_keyboard(message.from_user.id),
     )
