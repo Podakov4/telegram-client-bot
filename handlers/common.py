@@ -13,11 +13,9 @@ import config
 from services.stats import XrayStatsService
 from datetime import datetime, timezone
 
-# Инициализация сервиса статистики
 stats_service = XrayStatsService()
 router = Router()
 
-# Инициализация VLESS менеджера
 vless_manager = VLESSManager(
     server_ip=config.WG_SERVER_IP,
     port=config.VLESS_PORT,
@@ -26,7 +24,6 @@ vless_manager = VLESSManager(
 )
 
 
-# Машина состояний для оплаты
 class Payment(StatesGroup):
     waiting_for_payment = State()
     paid = State()
@@ -98,13 +95,13 @@ async def cmd_start(message: types.Message, state: FSMContext):
         db.close()
 
 
-async def show_main_menu(message: types.Message, client: Client):
+async def show_main_menu(message: types.Message, client_obj: Client):
     """Показать главное меню"""
-    status_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+    status_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
     text = (
-        f"👋 <b>С возвращением, {escape(client.full_name or 'пользователь')}! </b>\n\n "
+        f"👋 <b>С возвращением, {escape(client_obj.full_name or 'пользователь')}! </b>\n\n "
         f"<b>Статус подписки: </b>{status_text}\n "
-        f"<b>ID клиента: </b><code>{client.id}</code>\n\n "
+        f"<b>ID клиента: </b><code>{client_obj.id}</code>\n\n "
         f"Выберите действие: "
     )
 
@@ -122,16 +119,16 @@ async def cb_main_menu(callback: CallbackQuery, state: FSMContext):
 
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if client:
-            status_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+        if client_obj:
+            status_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
             text = (
                 f"👋 <b>С возвращением, {callback.from_user.full_name or 'пользователь'}! </b>\n\n "
                 f"<b>Статус подписки: </b>{status_text}\n "
-                f"<b>ID клиента: </b><code>{client.id}</code>\n\n "
+                f"<b>ID клиента: </b><code>{client_obj.id}</code>\n\n "
                 f"Выберите действие: "
             )
         else:
@@ -213,24 +210,24 @@ async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client:
+        if not client_obj:
             await callback.message.answer("❌ Ошибка. Нажмите /start")
             return
 
-        client.is_active = True
+        client_obj.is_active = True
 
         client_uuid, vless_link = vless_manager.add_client_to_xray(
-            client_id=client.id,
-            full_name=client.full_name or f"User_{user_id}",
-            email=f"client_{client.id}_{client.username or user_id}"
+            client_id=client_obj.id,
+            full_name=client_obj.full_name or f"User_{user_id}",
+            email=f"client_{client_obj.id}_{client_obj.username or user_id}"
         )
 
-        client.wireguard_public_key = client_uuid
-        client.wireguard_config = vless_link
+        client_obj.wireguard_public_key = client_uuid
+        client_obj.wireguard_config = vless_link
         db.commit()
 
         await callback.message.answer(
@@ -253,9 +250,9 @@ async def cb_confirm_payment_test(callback: CallbackQuery, state: FSMContext):
                 await callback.message.bot.send_message(
                     admin_id,
                     f"💰 <b>Новая оплата! </b>\n\n "
-                    f"<b>Клиент: </b>{escape(client.full_name or 'Не указано')}\n "
-                    f"<b>ID: </b><code>{client.id}</code>\n "
-                    f"<b>Telegram: </b>@{escape(client.username or 'не указан')}\n "
+                    f"<b>Клиент: </b>{escape(client_obj.full_name or 'Не указано')}\n "
+                    f"<b>ID: </b><code>{client_obj.id}</code>\n "
+                    f"<b>Telegram: </b>@{escape(client_obj.username or 'не указан')}\n "
                     f"<b>UUID: </b><code>{client_uuid}</code>"
                 )
             except:
@@ -273,15 +270,15 @@ async def cb_get_vpn(callback: CallbackQuery):
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client:
+        if not client_obj:
             await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
             return
 
-        if not client.is_active:
+        if not client_obj.is_active:
             text = (
                 "❌ <b>Подписка не оплачена</b>\n\n "
                 "Для получения доступа к VPN необходимо оплатить подписку.\n\n "
@@ -294,14 +291,14 @@ async def cb_get_vpn(callback: CallbackQuery):
             await callback.answer()
             return
 
-        if not client.wireguard_config:
+        if not client_obj.wireguard_config:
             await callback.message.answer("❌ VPN ссылка не сгенерирована. Обратитесь к администратору.")
             await callback.answer()
             return
 
         text = (
             f"🔗 <b>Ваша VPN ссылка (VLESS): </b>\n\n "
-            f"<code>{escape(client.wireguard_config)}</code>\n\n "
+            f"<code>{escape(client_obj.wireguard_config)}</code>\n\n "
             f"📱 <b>Для подключения: </b>\n "
             f"1. Скачайте <b>Hiddify</b> или <b>Happ</b>\n "
             f"2. Нажмите <b>'+'</b> и вставьте ссылку\n "
@@ -322,24 +319,24 @@ async def cb_profile(callback: CallbackQuery):
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client:
+        if not client_obj:
             await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
             return
 
         is_admin = user_id in config.ADMIN_IDS
-        status = "✅ Активна" if client.is_active else "❌ Не оплачена"
+        status = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
 
         text = (
             f"👤 <b>Ваш профиль</b>\n\n "
-            f"<b>ID клиента: </b><code>{client.id}</code>\n "
-            f"<b>Имя: </b>{escape(client.full_name or 'Не указано')}\n "
-            f"<b>Telegram: </b>@{escape(client.username or 'не указан')}\n "
+            f"<b>ID клиента: </b><code>{client_obj.id}</code>\n "
+            f"<b>Имя: </b>{escape(client_obj.full_name or 'Не указано')}\n "
+            f"<b>Telegram: </b>@{escape(client_obj.username or 'не указан')}\n "
             f"<b>Статус подписки: </b>{status}\n "
-            f"<b>Дата регистрации: </b>{client.created_at.strftime('%d.%m.%Y %H:%M')}\n\n "
+            f"<b>Дата регистрации: </b>{client_obj.created_at.strftime('%d.%m.%Y %H:%M')}\n\n "
             f"Выберите действие: "
         )
 
@@ -361,36 +358,36 @@ async def cb_my_stats(callback: CallbackQuery):
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client:
+        if not client_obj:
             await callback.message.answer("❌ Вы не зарегистрированы. Нажмите /start")
             return
 
-        is_online = stats_service.is_client_online(client.last_seen)
-        client.last_seen = datetime.now(timezone.utc)
-        client.is_online = is_online
+        is_online = stats_service.is_client_online(client_obj.last_seen)
+        client_obj.last_seen = datetime.now(timezone.utc)
+        client_obj.is_online = is_online
         db.commit()
 
         subscription_text = ""
-        if client.subscription_end:
-            days_left = (client.subscription_end - datetime.now(timezone.utc)).days
+        if client_obj.subscription_end:
+            days_left = (client_obj.subscription_end - datetime.now(timezone.utc)).days
             subscription_text = f"✅ Активна ({days_left} дн. осталось)" if days_left > 0 else "❌ Истекла"
         else:
-            subscription_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+            subscription_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
 
         text = (
             f"📊 <b>Ваша статистика</b>\n\n "
             f"<b>Статус подписки: </b>{subscription_text}\n "
             f"<b>Статус подключения: </b>{'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n "
-            f"<b>Последняя активность: </b>{client.last_seen.strftime('%d.%m.%Y %H:%M') if client.last_seen else 'Никогда'}\n\n "
+            f"<b>Последняя активность: </b>{client_obj.last_seen.strftime('%d.%m.%Y %H:%M') if client_obj.last_seen else 'Никогда'}\n\n "
             f"<b>📈 Трафик: </b>\n "
-            f"• ⬆️ Загружено: {stats_service.format_bytes(client.traffic_upload or 0)}\n "
-            f"• ⬇️ Скачано: {stats_service.format_bytes(client.traffic_download or 0)}\n "
-            f"• 🔄 Всего: {stats_service.format_bytes((client.traffic_upload or 0) + (client.traffic_download or 0))}\n\n "
-            f"<b>🔗 Подключений: </b>{client.connection_count or 0}\n\n "
+            f"• ⬆️ Загружено: {stats_service.format_bytes(client_obj.traffic_upload or 0)}\n "
+            f"• ⬇️ Скачано: {stats_service.format_bytes(client_obj.traffic_download or 0)}\n "
+            f"• 🔄 Всего: {stats_service.format_bytes((client_obj.traffic_upload or 0) + (client_obj.traffic_download or 0))}\n\n "
+            f"<b>🔗 Подключений: </b>{client_obj.connection_count or 0}\n\n "
             f"<i>Статистика обновляется каждые 5 минут</i>"
         )
 
@@ -416,12 +413,12 @@ async def cb_server_stats(callback: CallbackQuery):
 
     db: Session = get_db_session()
     try:
+        from sqlalchemy import func
         total = db.query(Client).count()
         active = db.query(Client).filter(Client.is_active == True).count()
         online = db.query(Client).filter(Client.is_online == True).count()
         with_vpn = db.query(Client).filter(Client.wireguard_config != None).count()
 
-        from sqlalchemy import func
         total_upload = db.query(func.sum(Client.traffic_upload)).scalar() or 0
         total_download = db.query(func.sum(Client.traffic_download)).scalar() or 0
 
@@ -490,36 +487,36 @@ async def cmd_my_stats(message: types.Message):
     user_id = message.from_user.id
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client:
+        if not client_obj:
             await message.answer("❌ Вы не зарегистрированы. Нажмите /start")
             return
 
-        is_online = stats_service.is_client_online(client.last_seen)
-        client.last_seen = datetime.now(timezone.utc)
-        client.is_online = is_online
+        is_online = stats_service.is_client_online(client_obj.last_seen)
+        client_obj.last_seen = datetime.now(timezone.utc)
+        client_obj.is_online = is_online
         db.commit()
 
         subscription_text = ""
-        if client.subscription_end:
-            days_left = (client.subscription_end - datetime.now(timezone.utc)).days
+        if client_obj.subscription_end:
+            days_left = (client_obj.subscription_end - datetime.now(timezone.utc)).days
             subscription_text = f"✅ Активна ({days_left} дн. осталось)" if days_left > 0 else "❌ Истекла"
         else:
-            subscription_text = "✅ Активна" if client.is_active else "❌ Не оплачена"
+            subscription_text = "✅ Активна" if client_obj.is_active else "❌ Не оплачена"
 
         text = (
             f"📊 <b>Ваша статистика</b>\n\n "
             f"<b>Статус подписки: </b>{subscription_text}\n "
             f"<b>Статус подключения: </b>{'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n "
-            f"<b>Последняя активность: </b>{client.last_seen.strftime('%d.%m.%Y %H:%M') if client.last_seen else 'Никогда'}\n\n "
+            f"<b>Последняя активность: </b>{client_obj.last_seen.strftime('%d.%m.%Y %H:%M') if client_obj.last_seen else 'Никогда'}\n\n "
             f"<b>📈 Трафик: </b>\n "
-            f"• ⬆️ Загружено: {stats_service.format_bytes(client.traffic_upload or 0)}\n "
-            f"• ⬇️ Скачано: {stats_service.format_bytes(client.traffic_download or 0)}\n "
-            f"• 🔄 Всего: {stats_service.format_bytes((client.traffic_upload or 0) + (client.traffic_download or 0))}\n\n "
-            f"<b>🔗 Подключений: </b>{client.connection_count or 0}\n\n "
+            f"• ⬆️ Загружено: {stats_service.format_bytes(client_obj.traffic_upload or 0)}\n "
+            f"• ⬇️ Скачано: {stats_service.format_bytes(client_obj.traffic_download or 0)}\n "
+            f"• 🔄 Всего: {stats_service.format_bytes((client_obj.traffic_upload or 0) + (client_obj.traffic_download or 0))}\n\n "
+            f"<b>🔗 Подключений: </b>{client_obj.connection_count or 0}\n\n "
             f"<i>Статистика обновляется каждые 5 минут</i>"
         )
 
@@ -537,11 +534,11 @@ async def cb_copy_vpn(callback: CallbackQuery):
 
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client or not client.is_active or not client.wireguard_config:
+        if not client_obj or not client_obj.is_active or not client_obj.wireguard_config:
             await callback.message.answer("❌ У вас нет активной VPN ссылки")
             await callback.answer()
             return
@@ -563,17 +560,17 @@ async def cb_copy_vpn_now(callback: CallbackQuery):
     user_id = callback.from_user.id
     db: Session = get_db_session()
     try:
-        client = db.query(Client).filter(
+        client_obj = db.query(Client).filter(
             Client.telegram_id == str(user_id)
         ).first()
 
-        if not client or not client.wireguard_config:
+        if not client_obj or not client_obj.wireguard_config:
             await callback.message.answer("❌ VPN ссылка недоступна")
             await callback.answer()
             return
 
         await callback.message.answer(
-            f"<code>{escape(client.wireguard_config)}</code>",
+            f"<code>{escape(client_obj.wireguard_config)}</code>",
             parse_mode="HTML"
         )
 
