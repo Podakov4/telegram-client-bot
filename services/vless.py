@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Сервис для генерации VLESS ссылок и управления клиентами Xray"""
-
 import uuid
 import requests
 import json
@@ -68,15 +67,13 @@ class VLESSManager:
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("success"):
+                    # Сначала ищем по порту
                     for inbound in data.get("obj", []):
                         if inbound.get("port") == port:
                             logger.info(f"✅ Найден Inbound с портом {port}: ID={inbound['id']}")
                             return inbound.get("id")
 
-            # Если не нашли по порту, вернем первый попавшийся vless inbound
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("success"):
+                    # Если не нашли, используем первый vless
                     for inbound in data.get("obj", []):
                         if inbound.get("protocol", "").lower() == "vless":
                             logger.warning(f"⚠️ Inbound с портом {port} не найден, используем: ID={inbound.get('id')}")
@@ -149,22 +146,22 @@ class VLESSManager:
                 logger.error(f"❌ Ошибка добавления клиента: {result.get('msg')}")
                 return "", ""
 
-            # Генерируем VLESS ссылку по образцу из панели
-            # Формат: vless://UUID@IP:PORT?params#remark
+            # Генерируем VLESS ссылку ПО ОБРАЗЦУ ИЗ ПАНЕЛИ
             domain = "freeth.ru"
             path = VLESS_PATH.lstrip("/")
 
-            # Параметры согласно вашему образцу:
+            # Параметры согласно ВАШЕМУ образцу ссылки из панели:
             params = [
                 f"type=ws",
                 f"encryption=none",
                 f"path=%2F{path}",  # URL encoded
                 f"host={domain}",
-                f"sni={domain}",
-                "security=none"  # Используем как в вашем образце!
+                f"sni={domain}",  # ⚠️ ДОБАВИЛ это важно для TLS
+                "security=none"  # Как в вашем образце из панели
             ]
 
             query_string = "&".join(params)
+            # Включаем порт из конфига - правильный!
             vless_link = f"vless://{client_uuid}@{domain}:{VLESS_PORT}?{query_string}#{full_name.replace(' ', '_')}"
 
             logger.info(f"🔗 Сгенерирована ссылка: {vless_link}")
@@ -187,5 +184,5 @@ class VLESSManager:
         return {"upload": 0, "download": 0, "total": 0}
 
 
-# Глобальный экземплятор
+# Глобальный экземпляр
 vless_manager_default = VLESSManager()
