@@ -45,6 +45,8 @@ class VLESSManager:
                 },
                 timeout=15,
             )
+            logger.info("3x-ui login url=%s", f"{self.panel_url}/login")
+            logger.info("3x-ui login status=%s body=%s", response.status_code, response.text)
 
             if response.status_code != 200:
                 logger.error("3x-ui login failed: HTTP %s", response.status_code)
@@ -66,6 +68,7 @@ class VLESSManager:
     def find_inbound_by_port(self, port: int) -> Optional[int]:
         try:
             response = self.session.get(self._api_url("list"), timeout=15)
+            logger.info("inbounds list status=%s body=%s", response.status_code, response.text)
 
             if response.status_code != 200:
                 logger.error("Не удалось получить список inbound: HTTP %s", response.status_code)
@@ -143,14 +146,15 @@ class VLESSManager:
             "id": inbound_id,
             "settings": json.dumps(settings),
         }
-
+        logger.info("addClient payload=%s", payload)
+        logger.info("addClient url=%s", self._api_url("addClient"))
         try:
             response = self.session.post(
                 self._api_url("addClient"),
                 json=payload,
                 timeout=20,
             )
-
+            logger.info("addClient status=%s body=%s", response.status_code, response.text)
             if response.status_code != 200:
                 logger.error("Ошибка addClient: HTTP %s", response.status_code)
                 return None

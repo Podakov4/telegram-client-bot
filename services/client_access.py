@@ -54,6 +54,7 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
             paid_until_ts_ms=paid_until_ts_ms,
             total_gb=0,
         )
+        logger.info("create_vpn_access_for_client result=%s", created)
 
         if not created:
             return False
