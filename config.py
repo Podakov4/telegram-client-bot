@@ -1,42 +1,29 @@
-#!/usr/bin/env python3
-"""Конфигурация приложения VLESS Telegram Bot"""
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Telegram
-BOT_TOKEN = os.getenv('BOT_TOKEN')
 
-# Database
-DATABASE_URL = os.getenv('DATABASE_URL')
+def get_env(name: str, default: str | None = None, required: bool = False) -> str:
+    value = os.getenv(name, default)
+    if required and not value:
+        raise ValueError(f"Не задана переменная окружения: {name}")
+    return value
 
-# Admin IDs
-admin_ids_raw = os.getenv('ADMIN_IDS', '')
-if admin_ids_raw:
-    ADMIN_IDS = [int(x.strip()) for x in admin_ids_raw.split(',') if x.strip()]
-else:
-    ADMIN_IDS = []
 
-# VLESS Settings
-VLESS_PORT = int(os.getenv('VLESS_PORT', '10443'))
-VLESS_PATH = os.getenv('VLESS_PATH', '/vless')
-VLESS_DOMAIN = os.getenv('VLESS_DOMAIN', 'freeth.ru')
+BOT_TOKEN = get_env("BOT_TOKEN", required=True)
+DATABASE_URL = get_env("DATABASE_URL", required=True)
 
-# 3x-ui Panel Configuration
-XUI_PANEL_URL = os.getenv('XUI_PANEL_URL', 'http://72.56.118.169:2053')
-XUI_USERNAME = os.getenv('XUI_USERNAME', 'xCwgwlzm8x')
-XUI_PASSWORD = os.getenv('XUI_PASSWORD', 'JOc8S87g30')
-XUI_WEB_BASE_PATH = os.getenv('XUI_WEB_BASE_PATH', 'YFBFh5UWZXQ7YxG6lt')
+XUI_BASE_URL = get_env("XUI_BASE_URL", required=True).rstrip("/")
+XUI_USERNAME = get_env("XUI_USERNAME", required=True)
+XUI_PASSWORD = get_env("XUI_PASSWORD", required=True)
 
-# App Settings
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO')
-DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
+VLESS_DOMAIN = get_env("VLESS_DOMAIN", required=True)
+VLESS_PUBLIC_PORT = int(get_env("VLESS_PUBLIC_PORT", "443"))
+VLESS_PATH = get_env("VLESS_PATH", "/vless")
+VLESS_SECURITY = get_env("VLESS_SECURITY", "tls")
+VLESS_SNI = get_env("VLESS_SNI", VLESS_DOMAIN)
 
-# Проверка обязательных параметров
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден в .env!")
-if not DATABASE_URL:
-    raise ValueError("❌ DATABASE_URL не найден в .env!")
+XRAY_INBOUND_PORT = int(get_env("XRAY_INBOUND_PORT", "10443"))
 
-print(f"✅ Конфигурация загружена успешно")
+LOG_LEVEL = get_env("LOG_LEVEL", "INFO")

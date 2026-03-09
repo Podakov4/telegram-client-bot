@@ -1,36 +1,33 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime, timezone
-
-Base = declarative_base()
+from datetime import datetime
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
+from database.db import Base
 
 
 class Client(Base):
-    """Модель клиента (строго по структуре реальной БД)"""
     __tablename__ = "clients"
-    __table_args__ = (
-        UniqueConstraint('telegram_id'),
-        UniqueConstraint('login'),
-    )
 
-    # Основные поля (есть в БД)
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, unique=True, index=True, nullable=False)
+
+    telegram_id = Column(String, unique=True, nullable=False, index=True)
     full_name = Column(String, nullable=True)
 
-    # Login для VLESS (есть в БД)
-    login = Column(String, unique=True, index=True, nullable=True)
+    login = Column(String, unique=True, nullable=True)
 
-    # Ссылка на конфиг (в БД называется subscription_link, а не wireguard_config!)
+    xui_uuid = Column(String, unique=True, nullable=True)
+    xui_email = Column(String, unique=True, nullable=True)
+
     subscription_link = Column(Text, nullable=True)
 
-    # Статусы (есть в БД)
-    is_active = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+    is_active = Column(Boolean, default=False, nullable=False)
+    is_paid = Column(Boolean, default=False, nullable=False)
 
-    # Заметки (есть в БД)
+    paid_until = Column(DateTime, nullable=True)
     notes = Column(Text, nullable=True)
 
-    def __repr__(self):
-        return f"<Client(id={self.id}, telegram_id='{self.telegram_id}', login='{self.login}')>"
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )

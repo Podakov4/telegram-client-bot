@@ -1,186 +1,168 @@
 #!/usr/bin/env python3
-"""Сервис для генерации VLESS ссылок и управления клиентами Xray"""
-import uuid
-import requests
+"""Сервис для работы с 3x-ui / Xray"""
+
 import json
 import logging
-from typing import Optional, Tuple
-from datetime import datetime, timedelta, timezone
-from config import XUI_PANEL_URL, XUI_USERNAME, XUI_PASSWORD, XUI_WEB_BASE_PATH, VLESS_PORT, VLESS_PATH, VLESS_DOMAIN
+import uuid
+from typing import Optional
+
+import requests
+
+from config import (
+    XUI_BASE_URL,
+    XUI_USERNAME,
+    XUI_PASSWORD,
+    VLESS_DOMAIN,
+    VLESS_PUBLIC_PORT,
+    VLESS_PATH,
+    VLESS_SECURITY,
+    VLESS_SNI,
+    XRAY_INBOUND_PORT,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class VLESSManager:
-    """Менеджер клиентов VLESS через REST API 3x-ui"""
-
-    def __init__(self, panel_url: str = None,
-                 username: str = None,
-                 password: str = None,
-                 web_base_path: str = None):
-        self.panel_url = (panel_url or XUI_PANEL_URL).rstrip('/')
+    def __init__(
+        self,
+        panel_url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+    ):
+        self.panel_url = (panel_url or XUI_BASE_URL).rstrip("/")
         self.username = username or XUI_USERNAME
         self.password = password or XUI_PASSWORD
-        self.web_base_path = (web_base_path or XUI_WEB_BASE_PATH).strip('/') if web_base_path else ""
-        self.session_token = None
-
-    def _get_api_base(self) -> str:
-        """Получить базовый путь API"""
-        base = "panel/api/inbounds/"
-        if self.web_base_path:
-            return f"{self.panel_url}/{self.web_base_path}/{base}"
-        return f"{self.panel_url}/{base}"
+        self.session = requests.Session()
 
     def login(self) -> bool:
-        """Авторизация в 3x-ui"""
         try:
-            if self.web_base_path:
-                login_url = f"{self.panel_url}/{self.web_base_path}/login"
-            else:
-                login_url = f"{self.panel_url}/login"
-
-            response = requests.post(
-                login_url,
-                json={"username": self.username, "password": self.password},
-                timeout=10
+            response = self.session.post(
+                f"{self.panel_url}/login",
+                json={
+                    "username": self.username,
+                    "password": self.password,
+                },
+                timeout=15,
             )
 
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("success"):
-                    self.session_token = response.cookies.get("3x-ui")
-                    if self.session_token:  # ✅ Проверка что токен получен
-                        logger.info("✅ Авторизация успешна!")
-                        return True
+            if response.status_code != 200:
+                logger.error("3x-ui login failed: HTTP %s", response.status_code)
+                return False
 
-            logger.error(f"❌ Ошибка входа: {response.status_code}")
-            return False
+            data = response.json()
+            if not data.get("success"):
+                logger.error("3x-ui login failed: %s", data.get("msg"))
+                return False
+
+            return True
         except Exception as e:
-            logger.error(f"❌ Ошибка подключения: {e}")
+            logger.exception("Ошибка логина в 3x-ui: %s", e)
             return False
+
+    def _api_url(self, path: str) -> str:
+        return f"{self.panel_url}/panel/api/inbounds/{path}"
 
     def find_inbound_by_port(self, port: int) -> Optional[int]:
-        """Найти Inbound по порту"""
         try:
-            url = self._get_api_base() + "list"
-            resp = requests.get(url, cookies={"3x-ui": self.session_token}, timeout=10)
+            response = self.session.get(self._api_url("list"), timeout=15)
 
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("success"):
-                    # Сначала ищем по порту
-                    for inbound in data.get("obj", []):
-                        if inbound.get("port") == port:
-                            logger.info(f"✅ Найден Inbound с портом {port}: ID={inbound['id']}")
-                            return inbound.get("id")
+            if response.status_code != 200:
+                logger.error("Не удалось получить список inbound: HTTP %s", response.status_code)
+                return None
 
-                    # Если не нашли, используем первый vless
-                    for inbound in data.get("obj", []):
-                        if inbound.get("protocol", "").lower() == "vless":
-                            logger.warning(f"⚠️ Inbound с портом {port} не найден, используем: ID={inbound.get('id')}")
-                            return inbound.get("id")
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка списка inbound: %s", data.get("msg"))
+                return None
 
-            logger.error("❌ Inbound не найден!")
+            for inbound in data.get("obj", []):
+                if inbound.get("port") == port:
+                    return inbound.get("id")
+
+            logger.error("Inbound с портом %s не найден", port)
             return None
         except Exception as e:
-            logger.error(f"❌ Ошибка поиска Inbound: {e}")
+            logger.exception("Ошибка поиска inbound: %s", e)
             return None
 
-    def add_client_to_xray(self, client_id: int, full_name: str, email: str,
-                           total_gb: int = 0, expiry_time: int = 0) -> Tuple[str, str]:
-        """
-        Добавить клиента в Xray и вернуть UUID и ссылку
+    def build_vless_link(self, client_uuid: str, remark: str) -> str:
+        path = VLESS_PATH if VLESS_PATH.startswith("/") else f"/{VLESS_PATH}"
+        remark = remark.replace(" ", "_")
 
-        Returns:
-            Tuple[uuid, vless_link]
+        return (
+            f"vless://{client_uuid}@{VLESS_DOMAIN}:{VLESS_PUBLIC_PORT}"
+            f"?type=ws"
+            f"&security={VLESS_SECURITY}"
+            f"&encryption=none"
+            f"&path=%2F{path.lstrip('/')}"
+            f"&host={VLESS_DOMAIN}"
+            f"&sni={VLESS_SNI}"
+            f"#{remark}"
+        )
+
+    def add_client(
+        self,
+        telegram_id: str,
+        full_name: str,
+        xui_email: str,
+        paid_until_ts_ms: int = 0,
+        total_gb: int = 0,
+    ) -> tuple[str, str, str] | None:
         """
+        Возвращает:
+        (xui_uuid, xui_email, subscription_link)
+        """
+        if not self.login():
+            return None
+
+        inbound_id = self.find_inbound_by_port(XRAY_INBOUND_PORT)
+        if not inbound_id:
+            return None
+
+        client_uuid = str(uuid.uuid4())
+
+        settings = {
+            "clients": [
+                {
+                    "id": client_uuid,
+                    "email": xui_email,
+                    "enable": True,
+                    "expiryTime": paid_until_ts_ms,
+                    "flow": "",
+                    "limitIp": 0,
+                    "totalGB": total_gb * 1024 * 1024 * 1024,
+                    "tgId": telegram_id,
+                    "subId": "",
+                    "reset": 0,
+                }
+            ]
+        }
+
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps(settings),
+        }
+
         try:
-            if not self.session_token:
-                if not self.login():
-                    raise Exception("Не удалось авторизоваться!")
-
-            # Находим inbound с нужным портом
-            inbound_id = self.find_inbound_by_port(VLESS_PORT)
-            if not inbound_id:
-                raise Exception("Inbound не найден!")
-
-            # Генерируем UUID
-            client_uuid = str(uuid.uuid4())
-
-            # Добавляем клиента в inbound
-            payload = {
-                "id": inbound_id,
-                "settings": json.dumps({
-                    "clients": [{
-                        "email": email,
-                        "enabled": True,
-                        "expiryTime": expiry_time,
-                        "flow": "",
-                        "id": client_uuid,
-                        "ip": "",
-                        "limitIp": 0,
-                        "limits": {},
-                        "method": "noencryption",
-                        "overallLimit": total_gb * 1024 * 1024 * 1024,
-                        "reset": 0,
-                        "tgId": str(client_id),
-                        "totalGB": 0,
-                        "uplinkSpeed": 0,
-                        "downlinkSpeed": 0
-                    }]
-                })
-            }
-
-            # Отправляем запрос
-            url = self._get_api_base() + "addClient"
-            response = requests.post(
-                url,
+            response = self.session.post(
+                self._api_url("addClient"),
                 json=payload,
-                cookies={"3x-ui": self.session_token},
-                timeout=30
+                timeout=20,
             )
 
-            result = response.json()
-            if result.get("success"):
-                logger.info(f"✅ Клиент {email} успешно добавлен!")
-            else:
-                logger.error(f"❌ Ошибка добавления клиента: {result.get('msg')}")
-                return "", ""
+            if response.status_code != 200:
+                logger.error("Ошибка addClient: HTTP %s", response.status_code)
+                return None
 
-            # ✅ Генерируем VLESS ссылку с использованием config.VLESS_DOMAIN
-            domain = VLESS_DOMAIN if VLESS_DOMAIN else "freeth.ru"
-            path = VLESS_PATH.lstrip("/")
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка addClient: %s", data.get("msg"))
+                return None
 
-            # Параметры согласно образцу из панели:
-            params = [
-                f"type=ws",
-                f"encryption=none",
-                f"path=%2F{path}",
-                f"host={domain}",
-                f"sni={domain}",
-                "security=none"
-            ]
-
-            query_string = "&".join(params)
-            vless_link = f"vless://{client_uuid}@{domain}:{VLESS_PORT}?{query_string}#{full_name.replace(' ', '_')}"
-
-            logger.info(f"🔗 Сгенерирована ссылка: {vless_link}")
-            return client_uuid, vless_link
+            subscription_link = self.build_vless_link(client_uuid, full_name or xui_email)
+            return client_uuid, xui_email, subscription_link
 
         except Exception as e:
-            logger.error(f"❌ Ошибка добавления клиента: {e}")
-            import traceback
-            traceback.print_exc()
-            return "", ""
-
-    def update_client_traffic(self, email: str, upload: int = 0, download: int = 0):
-        """Обновить трафик клиента"""
-        pass
-
-    def get_client_stats(self, email: str) -> dict:
-        """Получить статистику клиента"""
-        return {"upload": 0, "download": 0, "total": 0}
-
-
-# Глобальный экземпляр
-vless_manager_default = VLESSManager()
+            logger.exception("Ошибка создания клиента в 3x-ui: %s", e)
+            return None

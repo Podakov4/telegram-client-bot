@@ -1,334 +1,149 @@
-# handlers/client.py
-from aiogram import types, Router, F
+from aiogram import Router, F
+from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery
-from sqlalchemy.orm import Session
-from database import get_db_session, Client
-from html import escape
-from keyboards import inline
-import config
-from services.stats import XrayStatsService
-from datetime import datetime, timezone
-from sqlalchemy import func
+from sqlalchemy import select
 
-# Инициализация сервиса статистики
-stats_service = XrayStatsService()
+from database.db import AsyncSessionLocal
+from database.models import Client
+from services.client_access import create_vpn_access_for_client
 
 router = Router()
 
 
-@router.message(Command("clients"))
-async def cmd_clients(message: types.Message):
-    """Показать всех клиентов (только админ)"""
-    user_id = message.from_user.id
+def format_profile_text(client: Client) -> str:
+    active_text = "Да" if client.is_active else "Нет"
+    paid_text = "Да" if client.is_paid else "Нет"
+    paid_until_text = (
+        client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
+    )
 
-    if user_id not in config.ADMIN_IDS:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    db: Session = get_db_session()
-    try:
-        clients = db.query(Client).all()
-
-        if not clients:
-            await message.answer("📭 Клиентов пока нет.")
-            return
-
-        active_count = sum(1 for c in clients if c.is_active)
-
-        text = f"📋 <b>Всего клиентов: {len(clients)}</b>\n"
-        text += f"<b>Активных:</b> {active_count}\n\n"
-
-        for client in clients[:20]:
-            status = "✅" if client.is_active else "❌"
-            vpn = "🔗" if client.wireguard_config else ""
-
-            text += (
-                f"{status} <b>#{client.id}</b> {escape(client.full_name or 'Без имени')}\n"
-                f"📱 {escape(client.phone) or '—'}\n"
-                f"🆔 <code>{client.telegram_id}</code>\n"
-                f"{vpn}\n\n"
-            )
-
-        if len(clients) > 20:
-            text += f"... и ещё {len(clients) - 20} клиентов"
-
-        await message.answer(text)
-    finally:
-        db.close()
+    return (
+        f"Ваш профиль:\n\n"
+        f"ID: {client.id}\n"
+        f"Telegram ID: {client.telegram_id}\n"
+        f"Имя: {client.full_name or 'Не указано'}\n"
+        f"Логин: {client.login or 'Не указан'}\n"
+        f"UUID: {client.xui_uuid or 'Не назначен'}\n"
+        f"Активен: {active_text}\n"
+        f"Оплачено: {paid_text}\n"
+        f"Оплачено до: {paid_until_text}\n"
+    )
 
 
-@router.message(Command("stats"))
-async def cmd_stats(message: types.Message):
-    """Общая статистика сервера (только админ)"""
-    user_id = message.from_user.id
-
-    if user_id not in config.ADMIN_IDS:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    db: Session = get_db_session()
-    try:
-        total = db.query(Client).count()
-        active = db.query(Client).filter(Client.is_active == True).count()
-        online = db.query(Client).filter(Client.is_online == True).count()
-        with_vpn = db.query(Client).filter(Client.wireguard_config != None).count()
-
-        # Общая статистика трафика
-        total_upload = db.query(func.sum(Client.traffic_upload)).scalar() or 0
-        total_download = db.query(func.sum(Client.traffic_download)).scalar() or 0
-
-        text = (
-            f"📊 <b>Статистика сервера</b>\n\n"
-            f"<b>👥 Клиенты:</b>\n"
-            f"  • Всего: {total}\n"
-            f"  • Активных (оплатили): {active}\n"
-            f"  • Онлайн сейчас: {online}\n"
-            f"  • С VPN: {with_vpn}\n\n"
-            f"<b>📈 Трафик:</b>\n"
-            f"  • ⬆️ Загружено: {stats_service.format_bytes(total_upload)}\n"
-            f"  • ⬇️ Скачано: {stats_service.format_bytes(total_download)}\n"
-            f"  • 🔄 Всего: {stats_service.format_bytes(total_upload + total_download)}"
+def format_subscription_text(client: Client) -> str:
+    if not client.subscription_link:
+        return (
+            "У вас пока нет ссылки подписки.\n"
+            "Нажмите /create_access чтобы создать доступ."
         )
 
-        await message.answer(text)
-
-    finally:
-        db.close()
-
-
-@router.message(Command("activate"))
-async def cmd_activate(message: types.Message):
-    """Активировать клиента вручную (админ)"""
-    user_id = message.from_user.id
-
-    if user_id not in config.ADMIN_IDS:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    # Формат: /activate 123 (где 123 - ID клиента)
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer("❌ Использование: /activate <client_id>")
-        return
-
-    try:
-        client_id = int(args[1])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом")
-        return
-
-    db: Session = get_db_session()
-    try:
-        client = db.query(Client).filter(Client.id == client_id).first()
-
-        if not client:
-            await message.answer(f"❌ Клиент #{client_id} не найден")
-            return
-
-        client.is_active = True
-        db.commit()
-
-        await message.answer(f"✅ Клиент #{client_id} активирован!")
-
-        # Уведомление клиенту
-        try:
-            await message.bot.send_message(
-                client.telegram_id,
-                "✅ <b>Ваша подписка активирована!</b>\n\n"
-                "Теперь вы можете получить VPN ссылку через меню."
-            )
-        except:
-            pass
-
-    finally:
-        db.close()
+    return (
+        "Ваша ссылка подписки:\n\n"
+        f"{client.subscription_link}\n\n"
+        "Скопируйте ее и импортируйте в VPN-клиент."
+    )
 
 
-@router.message(Command("client_stats"))
-async def cmd_client_stats(message: types.Message):
-    """Статистика по конкретному клиенту (только админ)"""
-    user_id = message.from_user.id
+@router.message(Command("profile"))
+async def cmd_profile(message: Message):
+    telegram_id = str(message.from_user.id)
 
-    if user_id not in config.ADMIN_IDS:
-        await message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    args = message.text.split()
-    if len(args) != 2:
-        await message.answer("❌ Использование: /client_stats <client_id>")
-        return
-
-    try:
-        client_id = int(args[1])
-    except ValueError:
-        await message.answer("❌ ID должен быть числом")
-        return
-
-    db: Session = get_db_session()
-    try:
-        client = db.query(Client).filter(Client.id == client_id).first()
-
-        if not client:
-            await message.answer(f"❌ Клиент #{client_id} не найден")
-            return
-
-        # Определяем статус онлайн
-        is_online = stats_service.is_client_online(client.last_seen)
-
-        # Обновляем статус в БД
-        client.is_online = is_online
-        if is_online:
-            client.last_seen = datetime.now(timezone.utc)
-        db.commit()
-
-        text = (
-            f"👤 <b>Статистика клиента #{client.id}</b>\n\n"
-            f"<b>Имя:</b> {escape(client.full_name or 'Не указано')}\n"
-            f"<b>Telegram:</b> @{escape(client.username or 'не указан')}\n"
-            f"<b>Статус:</b> {'🟢 Онлайн' if is_online else '🔴 Офлайн'}\n"
-            f"<b>Подписка:</b> {'✅ Активна' if client.is_active else '❌ Не оплачена'}\n"
-            f"<b>Последний вход:</b> {client.last_seen.strftime('%d.%m.%Y %H:%M') if client.last_seen else 'Никогда'}\n\n"
-            f"<b>📊 Трафик:</b>\n"
-            f"  • ⬆️ Загружено: {stats_service.format_bytes(client.traffic_upload or 0)}\n"
-            f"  • ⬇️ Скачано: {stats_service.format_bytes(client.traffic_download or 0)}\n"
-            f"  • 🔄 Всего: {stats_service.format_bytes((client.traffic_upload or 0) + (client.traffic_download or 0))}\n\n"
-            f"<b>🔗 Подключения:</b> {client.connection_count or 0} раз"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
         )
+        client = result.scalar_one_or_none()
 
-        await message.answer(text)
-
-    finally:
-        db.close()
-
-
-@router.message(Command("top_traffic"))
-async def cmd_top_traffic(message: types.Message):
-    """Топ клиентов по трафику (только админ)"""
-    user_id = message.from_user.id
-
-    if user_id not in config.ADMIN_IDS:
-        await message.answer("❌ У вас нет доступа к этой команде.")
+    if client is None:
+        await message.answer("Профиль не найден. Нажмите /start")
         return
 
-    db: Session = get_db_session()
-    try:
-        clients = db.query(Client).filter(
-            Client.is_active == True,
-            Client.wireguard_config != None
-        ).order_by(
-            (Client.traffic_upload + Client.traffic_download).desc()
-        ).limit(10).all()
-
-        if not clients:
-            await message.answer("📭 Нет данных о трафике")
-            return
-
-        text = f"🏆 <b>Топ-10 по трафику</b>\n\n"
-        for i, client in enumerate(clients, 1):
-            total = (client.traffic_upload or 0) + (client.traffic_download or 0)
-            text += (
-                f"<b>{i}. {escape(client.full_name or f'Клиент #{client.id}')}</b>\n"
-                f"   📊 {stats_service.format_bytes(total)}\n"
-                f"   ⬆️ {stats_service.format_bytes(client.traffic_upload or 0)} | "
-                f"⬇️ {stats_service.format_bytes(client.traffic_download or 0)}\n\n"
-            )
-
-        await message.answer(text)
-
-    finally:
-        db.close()
+    await message.answer(format_profile_text(client))
 
 
-@router.callback_query(F.data == "admin_clients")
-async def cb_admin_clients(callback: CallbackQuery):
-    """Все клиенты (кнопка)"""
-    user_id = callback.from_user.id
+@router.message(Command("subscription"))
+async def cmd_subscription(message: Message):
+    telegram_id = str(message.from_user.id)
 
-    if user_id not in config.ADMIN_IDS:
-        await callback.message.answer("❌ У вас нет доступа к этой команде.")
-        return
-
-    db: Session = get_db_session()
-    try:
-        clients = db.query(Client).all()
-
-        if not clients:
-            await callback.message.answer("📭 Клиентов пока нет.")
-            return
-
-        active_count = sum(1 for c in clients if c.is_active)
-
-        text = f"📋 <b>Всего клиентов: {len(clients)}</b>\n"
-        text += f"<b>Активных:</b> {active_count}\n\n"
-
-        for client in clients[:20]:
-            status = "✅" if client.is_active else "❌"
-            vpn = "🔗" if client.wireguard_config else ""
-
-            text += (
-                f"{status} <b>#{client.id}</b> {escape(client.full_name or 'Без имени')}\n"
-                f"📱 {escape(client.phone) or '—'}\n"
-                f"🆔 <code>{client.telegram_id}</code>\n"
-                f"{vpn}\n\n"
-            )
-
-        if len(clients) > 20:
-            text += f"... и ещё {len(clients) - 20} клиентов"
-
-        await callback.message.answer(
-            text,
-            reply_markup=inline.back_to_menu_keyboard(),
-            parse_mode="HTML"
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
         )
+        client = result.scalar_one_or_none()
 
-    finally:
-        db.close()
+    if client is None:
+        await message.answer("Профиль не найден. Нажмите /start")
+        return
 
+    await message.answer(format_subscription_text(client))
+
+
+@router.message(Command("create_access"))
+async def cmd_create_access(message: Message):
+    telegram_id = str(message.from_user.id)
+
+    ok = await create_vpn_access_for_client(telegram_id)
+
+    if not ok:
+        await message.answer("Не удалось создать доступ. Проверь настройки 3x-ui.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
+        )
+        client = result.scalar_one_or_none()
+
+    await message.answer("Доступ создан.")
+    await message.answer(format_subscription_text(client))
+
+
+@router.callback_query(F.data == "my_profile")
+async def cb_my_profile(callback: CallbackQuery):
+    telegram_id = str(callback.from_user.id)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
+        )
+        client = result.scalar_one_or_none()
+
+    if client is None:
+        await callback.message.answer("Профиль не найден. Нажмите /start")
+        await callback.answer()
+        return
+
+    await callback.message.answer(format_profile_text(client))
     await callback.answer()
 
 
-@router.callback_query(F.data == "top_traffic")
-async def cb_top_traffic_btn(callback: CallbackQuery):
-    """Топ по трафику (кнопка)"""
-    user_id = callback.from_user.id
+@router.callback_query(F.data == "my_subscription")
+async def cb_my_subscription(callback: CallbackQuery):
+    telegram_id = str(callback.from_user.id)
 
-    if user_id not in config.ADMIN_IDS:
-        await callback.message.answer("❌ У вас нет доступа к этой команде.")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
+        )
+        client = result.scalar_one_or_none()
+
+    if client is None:
+        await callback.message.answer("Профиль не найден. Нажмите /start")
+        await callback.answer()
         return
 
-    db: Session = get_db_session()
-    try:
-        from sqlalchemy import func
+    await callback.message.answer(format_subscription_text(client))
+    await callback.answer()
 
-        clients = db.query(Client).filter(
-            Client.is_active == True,
-            Client.wireguard_config != None
-        ).order_by(
-            (Client.traffic_upload + Client.traffic_download).desc()
-        ).limit(10).all()
 
-        if not clients:
-            await callback.message.answer("📭 Нет данных о трафике")
-            return
-
-        text = f"🏆 <b>Топ-10 по трафику</b>\n\n"
-        for i, client in enumerate(clients, 1):
-            total = (client.traffic_upload or 0) + (client.traffic_download or 0)
-            text += (
-                f"<b>{i}. {escape(client.full_name or f'Клиент #{client.id}')}</b>\n"
-                f"   📊 {stats_service.format_bytes(total)}\n"
-                f"   ⬆️ {stats_service.format_bytes(client.traffic_upload or 0)} | "
-                f"⬇️ {stats_service.format_bytes(client.traffic_download or 0)}\n\n"
-            )
-
-        await callback.message.answer(
-            text,
-            reply_markup=inline.back_to_menu_keyboard(),
-            parse_mode="HTML"
-        )
-
-    finally:
-        db.close()
-
+@router.callback_query(F.data == "help")
+async def cb_help(callback: CallbackQuery):
+    await callback.message.answer(
+        "Команды:\n"
+        "/start — регистрация\n"
+        "/menu — меню\n"
+        "/profile — профиль\n"
+        "/subscription — ссылка подписки\n"
+        "/create_access — создать VPN-доступ"
+    )
     await callback.answer()
