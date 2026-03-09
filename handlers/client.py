@@ -38,15 +38,21 @@ def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
         return "У вас пока нет ссылки подписки.\nСначала оплатите подписку."
 
-    return (
-        "Подписка готова.\n\n"
-        "Нажмите «Показать ссылку», чтобы скопировать конфиг."
-    )
+    return "Подписка готова.\n\nНажмите «Показать ссылку», чтобы скопировать конфиг."
 
 
 def subscription_actions_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Показать ссылку", callback_data="show_vless_link")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def payment_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="1 месяц", callback_data="pay_1_month")
+    builder.button(text="3 месяца", callback_data="pay_3_months")
+    builder.button(text="12 месяцев", callback_data="pay_12_months")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -57,6 +63,43 @@ async def get_client_by_telegram_id(telegram_id: str):
             select(Client).where(Client.telegram_id == telegram_id)
         )
         return result.scalar_one_or_none()
+
+
+async def process_payment(message_or_callback, telegram_id: str, months: int, user_id: int):
+    ok = await activate_subscription(telegram_id, months=months)
+    if not ok:
+        text = "Не удалось активировать подписку."
+        if isinstance(message_or_callback, CallbackQuery):
+            await message_or_callback.message.answer(text)
+            await message_or_callback.answer()
+        else:
+            await message_or_callback.answer(text)
+        return
+
+    client = await get_client_by_telegram_id(telegram_id)
+    text = f"Подписка на {months} мес. активирована." if months != 12 else "Подписка на 12 месяцев активирована."
+
+    if isinstance(message_or_callback, CallbackQuery):
+        await message_or_callback.message.answer(
+            text,
+            reply_markup=main_reply_keyboard(user_id),
+        )
+        if client and client.subscription_link:
+            await message_or_callback.message.answer(
+                "Ссылка готова:",
+                reply_markup=subscription_actions_keyboard(),
+            )
+        await message_or_callback.answer("Оплата активирована")
+    else:
+        await message_or_callback.answer(
+            text,
+            reply_markup=main_reply_keyboard(user_id),
+        )
+        if client and client.subscription_link:
+            await message_or_callback.answer(
+                "Ссылка готова:",
+                reply_markup=subscription_actions_keyboard(),
+            )
 
 
 @router.message(Command("profile"))
@@ -114,64 +157,42 @@ async def cb_show_vless_link(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.message(F.text == "Оплатить 1 месяц")
-async def pay_1_month(message: Message):
-    ok = await activate_subscription(str(message.from_user.id), months=1)
-    if not ok:
-        await message.answer("Не удалось активировать подписку.")
-        return
-
-    client = await get_client_by_telegram_id(str(message.from_user.id))
+@router.message(F.text == "Оплата")
+async def payment_menu(message: Message):
     await message.answer(
-        "Подписка на 1 месяц активирована.",
-        reply_markup=main_reply_keyboard(message.from_user.id),
+        "Выберите тариф:",
+        reply_markup=payment_keyboard(),
     )
 
-    if client and client.subscription_link:
-        await message.answer(
-            "Ссылка готова:",
-            reply_markup=subscription_actions_keyboard(),
-        )
 
-
-@router.message(F.text == "Оплатить 3 месяца")
-async def pay_3_months(message: Message):
-    ok = await activate_subscription(str(message.from_user.id), months=3)
-    if not ok:
-        await message.answer("Не удалось активировать подписку.")
-        return
-
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-    await message.answer(
-        "Подписка на 3 месяца активирована.",
-        reply_markup=main_reply_keyboard(message.from_user.id),
+@router.callback_query(F.data == "pay_1_month")
+async def cb_pay_1_month(callback: CallbackQuery):
+    await process_payment(
+        callback,
+        telegram_id=str(callback.from_user.id),
+        months=1,
+        user_id=callback.from_user.id,
     )
 
-    if client and client.subscription_link:
-        await message.answer(
-            "Ссылка готова:",
-            reply_markup=subscription_actions_keyboard(),
-        )
 
-
-@router.message(F.text == "Оплатить 12 месяцев")
-async def pay_12_months(message: Message):
-    ok = await activate_subscription(str(message.from_user.id), months=12)
-    if not ok:
-        await message.answer("Не удалось активировать подписку.")
-        return
-
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-    await message.answer(
-        "Подписка на 12 месяцев активирована.",
-        reply_markup=main_reply_keyboard(message.from_user.id),
+@router.callback_query(F.data == "pay_3_months")
+async def cb_pay_3_months(callback: CallbackQuery):
+    await process_payment(
+        callback,
+        telegram_id=str(callback.from_user.id),
+        months=3,
+        user_id=callback.from_user.id,
     )
 
-    if client and client.subscription_link:
-        await message.answer(
-            "Ссылка готова:",
-            reply_markup=subscription_actions_keyboard(),
-        )
+
+@router.callback_query(F.data == "pay_12_months")
+async def cb_pay_12_months(callback: CallbackQuery):
+    await process_payment(
+        callback,
+        telegram_id=str(callback.from_user.id),
+        months=12,
+        user_id=callback.from_user.id,
+    )
 
 
 @router.message(F.text == "Помощь")
@@ -180,10 +201,8 @@ async def help_message(message: Message):
         "Доступные действия:\n"
         "• Мой профиль\n"
         "• Моя подписка\n"
-        "• Оплатить 1 месяц\n"
-        "• Оплатить 3 месяца\n"
-        "• Оплатить 12 месяцев\n\n"
-        "После оплаты подписка активируется автоматически.",
+        "• Оплата\n\n"
+        "После выбора тарифа подписка активируется автоматически.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
 

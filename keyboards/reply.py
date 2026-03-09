@@ -10,11 +10,7 @@ def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton(text="Моя подписка"),
         ],
         [
-            KeyboardButton(text="Оплатить 1 месяц"),
-            KeyboardButton(text="Оплатить 3 месяца"),
-        ],
-        [
-            KeyboardButton(text="Оплатить 12 месяцев"),
+            KeyboardButton(text="Оплата"),
             KeyboardButton(text="Помощь"),
         ],
     ]
