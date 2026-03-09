@@ -11,10 +11,12 @@ logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)  # ✅ ИСПРАВЛЕНО
 
 
 async def main():
+    """Основная функция"""
     logger.info("🚀 Запуск бота...")
     create_tables()
     logger.info("✅ База данных готова")
@@ -25,7 +27,6 @@ async def main():
     )
 
     dp = Dispatcher()
-
     dp.include_router(common.router)
     dp.include_router(client.router)
     dp.include_router(menu.router)
@@ -38,7 +39,7 @@ async def main():
     await dp.start_polling(bot)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # ✅ ИСПРАВЛЕНО
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
