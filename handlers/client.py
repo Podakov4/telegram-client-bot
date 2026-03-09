@@ -1,6 +1,7 @@
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
 from config import ADMIN_IDS
@@ -33,6 +34,14 @@ def format_profile_text(client: Client) -> str:
     )
 
 
+def subscription_actions_keyboard(link: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Открыть в приложении", url=link)
+    builder.button(text="Показать ссылку", callback_data="show_vless_link")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
         if client.is_paid:
@@ -46,9 +55,8 @@ def format_subscription_text(client: Client) -> str:
         )
 
     return (
-        "Ваша ссылка подписки:\n\n"
-        f"{client.subscription_link}\n\n"
-        "Скопируйте ее и импортируйте в VPN-клиент."
+        "Ваша подписка готова.\n\n"
+        "Можно открыть конфиг сразу в приложении или показать ссылку текстом для копирования."
     )
 
 
@@ -69,7 +77,10 @@ async def cmd_profile(message: Message):
         await message.answer("Профиль не найден. Нажмите /start")
         return
 
-    await message.answer(format_profile_text(client), reply_markup=main_reply_keyboard(message.from_user.id))
+    await message.answer(
+        format_profile_text(client),
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
 
 
 @router.message(Command("subscription"))
@@ -81,13 +92,42 @@ async def cmd_subscription(message: Message):
         await message.answer("Профиль не найден. Нажмите /start")
         return
 
-    await message.answer(format_subscription_text(client), reply_markup=main_reply_keyboard(message.from_user.id))
+    if not client.subscription_link:
+        await message.answer(
+            format_subscription_text(client),
+            reply_markup=main_reply_keyboard(message.from_user.id),
+        )
+        return
+
+    await message.answer(
+        format_subscription_text(client),
+        reply_markup=subscription_actions_keyboard(client.subscription_link),
+    )
+
+
+@router.callback_query(F.data == "show_vless_link")
+async def cb_show_vless_link(callback: CallbackQuery):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None or not client.subscription_link:
+        await callback.message.answer("Ссылка подписки не найдена.")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "Ссылка для копирования:\n\n"
+        f"<code>{client.subscription_link}</code>",
+        parse_mode="HTML",
+        reply_markup=main_reply_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
 
 
 @router.message(F.text == "Запросить доступ")
 async def request_access(message: Message):
     await message.answer(
-        "Заявка на доступ отправлена.\nПосле подтверждения оплаты и создания доступа ссылка появится в разделе «Моя подписка».",
+        "Заявка на доступ отправлена.\n"
+        "После подтверждения оплаты и создания доступа ссылка появится в разделе «Моя подписка».",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
 
@@ -120,7 +160,10 @@ async def pay_me(message: Message):
         await message.answer("Не удалось подтвердить оплату.")
         return
 
-    await message.answer("Оплата подтверждена.", reply_markup=main_reply_keyboard(message.from_user.id))
+    await message.answer(
+        "Оплата подтверждена.",
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
 
 
 @router.message(F.text == "➕ Создать доступ")
@@ -137,8 +180,22 @@ async def create_access_me(message: Message):
         return
 
     client = await get_client_by_telegram_id(telegram_id)
-    await message.answer("Доступ создан.", reply_markup=main_reply_keyboard(message.from_user.id))
-    await message.answer(format_subscription_text(client), reply_markup=main_reply_keyboard(message.from_user.id))
+
+    await message.answer(
+        "Доступ создан.",
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
+
+    if client and client.subscription_link:
+        await message.answer(
+            "Подписка готова. Выберите действие:",
+            reply_markup=subscription_actions_keyboard(client.subscription_link),
+        )
+    else:
+        await message.answer(
+            "Доступ создан, но ссылка пока не найдена в базе.",
+            reply_markup=main_reply_keyboard(message.from_user.id),
+        )
 
 
 @router.message(F.text == "⛔ Отключить подписку")
@@ -154,4 +211,7 @@ async def unpay_me(message: Message):
         await message.answer("Не удалось отключить подписку.")
         return
 
-    await message.answer("Подписка отключена.", reply_markup=main_reply_keyboard(message.from_user.id))
+    await message.answer(
+        "Подписка отключена.",
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
