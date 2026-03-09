@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta
+import logging
+
 from sqlalchemy import select
 
 from database.db import AsyncSessionLocal
 from database.models import Client
 from services.vless import VLESSManager
-import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,8 @@ async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
 
 
 async def create_vpn_access_for_client(telegram_id: str) -> bool:
+    logger.info("create_vpn_access_for_client start telegram_id=%s", telegram_id)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.telegram_id == telegram_id)
@@ -37,12 +41,22 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
         client = result.scalar_one_or_none()
 
         if client is None:
+            logger.warning("Client not found for telegram_id=%s", telegram_id)
             return False
 
+        logger.info(
+            "Client found id=%s login=%s xui_uuid=%s",
+            client.id,
+            client.login,
+            client.xui_uuid,
+        )
+
         if client.xui_uuid and client.subscription_link:
+            logger.info("Client already has access telegram_id=%s", telegram_id)
             return True
 
         xui_email = client.login or f"user_{client.id}"
+        logger.info("Using xui_email=%s for telegram_id=%s", xui_email, telegram_id)
 
         manager = VLESSManager()
 
@@ -56,9 +70,11 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
             paid_until_ts_ms=paid_until_ts_ms,
             total_gb=0,
         )
+
         logger.info("create_vpn_access_for_client result=%s", created)
 
         if not created:
+            logger.error("Failed to create client access for telegram_id=%s", telegram_id)
             return False
 
         xui_uuid, xui_email, subscription_link = created

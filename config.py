@@ -10,11 +10,7 @@ def get_env(name: str, default: str | None = None, required: bool = False) -> st
         raise ValueError(f"Не задана переменная окружения: {name}")
     return value
 
-ADMIN_IDS = [
-    int(x.strip())
-    for x in get_env("ADMIN_IDS", "").split(",")
-    if x.strip()
-]
+
 BOT_TOKEN = get_env("BOT_TOKEN", required=True)
 DATABASE_URL = get_env("DATABASE_URL", required=True)
 
@@ -31,3 +27,9 @@ VLESS_SNI = get_env("VLESS_SNI", VLESS_DOMAIN)
 XRAY_INBOUND_PORT = int(get_env("XRAY_INBOUND_PORT", "10443"))
 
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")
+
+ADMIN_IDS = [
+    int(x.strip())
+    for x in get_env("ADMIN_IDS", "").split(",")
+    if x.strip()
+]

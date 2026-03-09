@@ -37,15 +37,18 @@ class VLESSManager:
 
     def login(self) -> bool:
         try:
+            login_url = f"{self.panel_url}/login"
+
             response = self.session.post(
-                f"{self.panel_url}/login",
+                login_url,
                 json={
                     "username": self.username,
                     "password": self.password,
                 },
                 timeout=15,
             )
-            logger.info("3x-ui login url=%s", f"{self.panel_url}/login")
+
+            logger.info("3x-ui login url=%s", login_url)
             logger.info("3x-ui login status=%s body=%s", response.status_code, response.text)
 
             if response.status_code != 200:
@@ -68,6 +71,7 @@ class VLESSManager:
     def find_inbound_by_port(self, port: int) -> Optional[int]:
         try:
             response = self.session.get(self._api_url("list"), timeout=15)
+
             logger.info("inbounds list status=%s body=%s", response.status_code, response.text)
 
             if response.status_code != 200:
@@ -81,6 +85,7 @@ class VLESSManager:
 
             for inbound in data.get("obj", []):
                 if inbound.get("port") == port:
+                    logger.info("Found inbound id=%s for port=%s", inbound.get("id"), port)
                     return inbound.get("id")
 
             logger.error("Inbound с портом %s не найден", port)
@@ -112,10 +117,6 @@ class VLESSManager:
         paid_until_ts_ms: int = 0,
         total_gb: int = 0,
     ) -> tuple[str, str, str] | None:
-        """
-        Возвращает:
-        (xui_uuid, xui_email, subscription_link)
-        """
         if not self.login():
             return None
 
@@ -146,15 +147,21 @@ class VLESSManager:
             "id": inbound_id,
             "settings": json.dumps(settings),
         }
-        logger.info("addClient payload=%s", payload)
-        logger.info("addClient url=%s", self._api_url("addClient"))
+
         try:
+            add_url = self._api_url("addClient")
+
+            logger.info("addClient url=%s", add_url)
+            logger.info("addClient payload=%s", payload)
+
             response = self.session.post(
-                self._api_url("addClient"),
+                add_url,
                 json=payload,
                 timeout=20,
             )
+
             logger.info("addClient status=%s body=%s", response.status_code, response.text)
+
             if response.status_code != 200:
                 logger.error("Ошибка addClient: HTTP %s", response.status_code)
                 return None
