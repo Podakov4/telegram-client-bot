@@ -10,7 +10,9 @@ def get_env(name: str, default: str | None = None, required: bool = False) -> st
         raise ValueError(f"Не задана переменная окружения: {name}")
     return value
 
-
+ADMIN_IDS = [
+    int(x) for x in get_env("ADMIN_IDS", "").split(",") if x.strip()
+]
 BOT_TOKEN = get_env("BOT_TOKEN", required=True)
 DATABASE_URL = get_env("DATABASE_URL", required=True)
 

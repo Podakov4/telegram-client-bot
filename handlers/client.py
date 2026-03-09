@@ -2,6 +2,8 @@ from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message
 from aiogram.filters import Command
 from sqlalchemy import select
+from config import ADMIN_IDS
+from services.payments import mark_client_paid, mark_client_unpaid
 
 from database.db import AsyncSessionLocal
 from database.models import Client
@@ -147,3 +149,44 @@ async def cb_help(callback: CallbackQuery):
         "/create_access — создать VPN-доступ"
     )
     await callback.answer()
+
+@router.message(Command("pay"))
+async def cmd_pay(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: /pay <telegram_id>")
+        return
+
+    telegram_id = parts[1]
+    ok = await mark_client_paid(telegram_id)
+
+    if not ok:
+        await message.answer("Клиент не найден.")
+        return
+
+    await message.answer(f"Оплата подтверждена для {telegram_id}.")
+
+
+@router.message(Command("unpay"))
+async def cmd_unpay(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        await message.answer("Использование: /unpay <telegram_id>")
+        return
+
+    telegram_id = parts[1]
+    ok = await mark_client_unpaid(telegram_id)
+
+    if not ok:
+        await message.answer("Клиент не найден.")
+        return
+
+    await message.answer(f"Подписка отключена для {telegram_id}.")
