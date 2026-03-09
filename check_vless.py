@@ -3,6 +3,8 @@
 
 import sys
 import os
+from datetime import datetime
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 
@@ -15,7 +17,6 @@ print("=" * 70)
 print("🔧 ПРОВЕРКА НАСТРОЕК VLESS")
 print("=" * 70)
 
-# Получаем настройки
 print(f"\n[1] КОНФИГУРАЦИЯ ПОДПИСКА:")
 print(f"   Порт:    {VLESS_PORT}")
 print(f"   Путь:    {VLESS_PATH}")
@@ -29,52 +30,60 @@ else:
     print("\n❌ Ошибка подключения к 3x-ui")
     sys.exit(1)
 
-# Проверяем инбоуды
 db = get_db_session()
 try:
     clients = db.query(Client).all()
     print(f"\n[2] КЛИЕНТЫ В БАЗЕ ({len(clients)}):")
-    
-    # Получаем список активных пользователей
-    inbound_emails = {}
+
+    # Получаем список пользователей из 3x-ui API
+    inbound_users = set()
     try:
         emails = stats_service.get_all_clients()
         for email in emails:
-            inbound_emails[email] = True
-            
+            inbound_users.add(email)
+            print(f"     ✓ API клиент: {email}")
+
     except Exception as e:
-        print(f"⚠️ Не удалось получить список клиентов: {e}")
-        
-    for client in clients[:5]:  # Покажем первых 5
+        print(f"\n⚠️ Не удалось получить список клиентов из API: {e}")
+
+    for client in clients[:10]:
         status = "✅ Активен" if client.is_active else "❌ Деактивирован"
-        
-        # Проверка совпадения email и логинов
-        email_match = "✅ OK" if client.email == client.login else "⚠️ РАЗЛИЧИЕ"
-        
-        print(f"\n[{client.id}] {client.full_name}")
+        api_status = "✔️ В инбоунде" if client.login in inbound_users else "❌ Нет в API"
+
+        print(f"\n[{client.id}] {client.full_name or 'Без имени'}")
         print(f"   Telegram ID:     {client.telegram_id}")
-        print(f"   Email:           {client.email}")
-        print(f"   Login:           {client.login} {email_match}")
+        print(f"   Login:           {client.login}")
         print(f"   Статус:          {status}")
-        print(f"   Инбаунд в API:   {'✔️ Найден' if client.email in inbound_emails else '❌ Не найден'}")
-        
+        print(f"   В инбоунде:      {api_status}")
+
         # Генерируем ссылку для теста
-        link = f"vless://{client.email}@freeth.ru:{VLESS_PORT}?encryption=none&security=tls&sni=freeth.ru&type={VLESS_PATH.lstrip('/')}&host=freeth.ru"
-        print(f"   Ссылка (с path):  https://freeth.ru{VLESS_PATH}")
+        path = VLESS_PATH.lstrip('/')
+        print(f"   Ссылка (с path): https://freeth.ru{path}")
 
 finally:
     db.close()
 
-# Проверяем Nginx
-print("\n[3] ПРОВЕРКА NGINX (путь /vless):")
+# Проверяем Nginx доступность пути
+print("\n[3] ПРОВЕРКА NGINX (путь VLESS):")
 try:
     response = requests.head("https://freeth.ru/vless", timeout=5, allow_redirects=False)
-    print(f"   Статус: {response.status_code}")
-    print(f"   Response: {response.headers.get('Server', 'Nginx')}")
+    print(f"   Статус код: {response.status_code}")
+    print(f"   Сервер: {response.headers.get('Server', 'Unknown')}")
+    if response.status_code != 404:
+        print("   ✅ Пути доступны")
+    else:
+        print("   ⚠️ Путь /vless вернул 404")
 except Exception as e:
-    print(f"   ⚠️ Ошибка: {e}")
+    print(f"   ⚠️ Ошибка проверки: {e}")
+
+# Проверяем SSL сертификат
+print("\n[4] ПРОВЕРКА SSL СЕРТИФИКАТА:")
+try:
+    ssl_check = os.popen("""echo | openssl s_client -connect freeth.ru:443 -servername freeth.ru 2>/dev/null | openssl x509 -noout -dates""").read()
+    print(f"   Даты действия:\n{ssl_check}")
+except Exception as e:
+    print(f"   ⚠️ Ошибка проверки SSL: {e}")
 
 print("\n" + "=" * 70)
 print("✅ ПРОВЕРКА ЗАВЕРШЕНА")
 print("=" * 70)
-
