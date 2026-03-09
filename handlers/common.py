@@ -17,10 +17,10 @@ stats_service = XrayStatsService()
 router = Router()
 
 vless_manager = VLESSManager(
-    panel_url=XUI_PANEL_URL,
-    username=XUI_USERNAME,
-    password=XUI_PASSWORD,
-    web_base_path=XUI_WEB_BASE_PATH,
+    panel_url=config.XUI_PANEL_URL,
+    username=config.XUI_USERNAME,
+    password=config.XUI_PASSWORD,
+    web_base_path=config.XUI_WEB_BASE_PATH,
     port=10443,
     path="/vless",
     host="freeth.ru"
