@@ -25,6 +25,10 @@ VLESS_PATH = get_env("VLESS_PATH", "/vless")
 VLESS_SECURITY = get_env("VLESS_SECURITY", "tls")
 VLESS_SNI = get_env("VLESS_SNI", VLESS_DOMAIN)
 
+PRICE_1_MONTH = get_env("PRICE_1_MONTH", "199 ₽")
+PRICE_3_MONTHS = get_env("PRICE_3_MONTHS", "499 ₽")
+PRICE_12_MONTHS = get_env("PRICE_12_MONTHS", "1490 ₽")
+
 XRAY_INBOUND_PORT = int(get_env("XRAY_INBOUND_PORT", "10443"))
 
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")

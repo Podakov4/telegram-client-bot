@@ -1,19 +1,24 @@
+from datetime import datetime
+from io import BytesIO
+
+import qrcode
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
-from config import ADMIN_IDS
+from config import (
+    ADMIN_IDS,
+    PRICE_1_MONTH,
+    PRICE_3_MONTHS,
+    PRICE_12_MONTHS,
+)
 from database.db import AsyncSessionLocal
 from database.models import Client
 from keyboards.reply import main_reply_keyboard
 from services.client_access import create_vpn_access_for_client
 from services.payments import activate_subscription, deactivate_subscription
-from io import BytesIO
-import qrcode
-from aiogram.types import BufferedInputFile
-
 from services.subscriptions import get_expiring_clients
 
 router = Router()
@@ -22,9 +27,17 @@ router = Router()
 def format_profile_text(client: Client) -> str:
     active_text = "Да" if client.is_active else "Нет"
     paid_text = "Да" if client.is_paid else "Нет"
-    paid_until_text = (
-        client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
-    )
+
+    if client.paid_until:
+        paid_until_text = client.paid_until.strftime("%Y-%m-%d %H:%M")
+        days_left = (client.paid_until - datetime.utcnow()).days
+        if days_left < 0:
+            days_left_text = "Истекла"
+        else:
+            days_left_text = f"{days_left} дн."
+    else:
+        paid_until_text = "Не указано"
+        days_left_text = "Не указано"
 
     return (
         f"Ваш профиль:\n\n"
@@ -36,6 +49,7 @@ def format_profile_text(client: Client) -> str:
         f"Активен: {active_text}\n"
         f"Оплачено: {paid_text}\n"
         f"Оплачено до: {paid_until_text}\n"
+        f"Осталось: {days_left_text}\n"
     )
 
 
@@ -43,7 +57,7 @@ def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
         return "У вас пока нет ссылки подписки.\nСначала оплатите подписку."
 
-    return "Подписка готова.\n\nНажмите «Показать ссылку», чтобы скопировать конфиг."
+    return "Подписка готова.\n\nВыберите действие ниже."
 
 
 def subscription_actions_keyboard():
@@ -56,9 +70,9 @@ def subscription_actions_keyboard():
 
 def payment_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="1 месяц", callback_data="pay_1_month")
-    builder.button(text="3 месяца", callback_data="pay_3_months")
-    builder.button(text="12 месяцев", callback_data="pay_12_months")
+    builder.button(text=f"1 месяц — {PRICE_1_MONTH}", callback_data="pay_1_month")
+    builder.button(text=f"3 месяца — {PRICE_3_MONTHS}", callback_data="pay_3_months")
+    builder.button(text=f"12 месяцев — {PRICE_12_MONTHS}", callback_data="pay_12_months")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -71,7 +85,12 @@ async def get_client_by_telegram_id(telegram_id: str):
         return result.scalar_one_or_none()
 
 
-async def process_payment(message_or_callback, telegram_id: str, months: int, user_id: int):
+async def process_payment(
+    message_or_callback,
+    telegram_id: str,
+    months: int,
+    user_id: int,
+):
     ok = await activate_subscription(telegram_id, months=months)
     if not ok:
         text = "Не удалось активировать подписку."
@@ -83,7 +102,17 @@ async def process_payment(message_or_callback, telegram_id: str, months: int, us
         return
 
     client = await get_client_by_telegram_id(telegram_id)
-    text = f"Подписка на {months} мес. активирована." if months != 12 else "Подписка на 12 месяцев активирована."
+
+    if months == 1:
+        plan_name = "1 месяц"
+    elif months == 3:
+        plan_name = "3 месяца"
+    elif months == 12:
+        plan_name = "12 месяцев"
+    else:
+        plan_name = f"{months} мес."
+
+    text = f"Тариф «{plan_name}» активирован."
 
     if isinstance(message_or_callback, CallbackQuery):
         await message_or_callback.message.answer(
@@ -163,10 +192,47 @@ async def cb_show_vless_link(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "show_vless_qr")
+async def cb_show_vless_qr(callback: CallbackQuery):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None or not client.subscription_link:
+        await callback.message.answer("Ссылка подписки не найдена.")
+        await callback.answer()
+        return
+
+    qr = qrcode.QRCode(box_size=10, border=2)
+    qr.add_data(client.subscription_link)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    photo = BufferedInputFile(
+        buffer.getvalue(),
+        filename="vless_qr.png",
+    )
+
+    await callback.message.answer_photo(
+        photo,
+        caption="QR-код вашей подписки.",
+        reply_markup=main_reply_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
+
+
 @router.message(F.text == "Оплата")
 async def payment_menu(message: Message):
     await message.answer(
-        "Выберите тариф:",
+        "Выберите тариф:\n\n"
+        f"• 1 месяц — {PRICE_1_MONTH}\n"
+        "  Подходит для первого знакомства\n\n"
+        f"• 3 месяца — {PRICE_3_MONTHS}\n"
+        "  Оптимальный вариант\n\n"
+        f"• 12 месяцев — {PRICE_12_MONTHS}\n"
+        "  Самый выгодный тариф\n",
         reply_markup=payment_keyboard(),
     )
 
@@ -199,6 +265,33 @@ async def cb_pay_12_months(callback: CallbackQuery):
         months=12,
         user_id=callback.from_user.id,
     )
+
+
+@router.message(Command("check_expiring"))
+async def cmd_check_expiring(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
+
+    clients = await get_expiring_clients(days=3)
+
+    if not clients:
+        await message.answer("Подписок, истекающих в ближайшие 3 дня, нет.")
+        return
+
+    lines = ["Подписки, истекающие в ближайшие 3 дня:\n"]
+    for client in clients:
+        paid_until = (
+            client.paid_until.strftime("%Y-%m-%d %H:%M")
+            if client.paid_until
+            else "Не указано"
+        )
+        lines.append(
+            f"ID={client.id} | tg={client.telegram_id} | "
+            f"{client.full_name or 'Без имени'} | до {paid_until}"
+        )
+
+    await message.answer("\n".join(lines))
 
 
 @router.message(F.text == "Помощь")
@@ -253,56 +346,3 @@ async def unpay_me(message: Message):
         "Подписка отключена.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
-
-@router.callback_query(F.data == "show_vless_qr")
-async def cb_show_vless_qr(callback: CallbackQuery):
-    client = await get_client_by_telegram_id(str(callback.from_user.id))
-
-    if client is None or not client.subscription_link:
-        await callback.message.answer("Ссылка подписки не найдена.")
-        await callback.answer()
-        return
-
-    qr = qrcode.QRCode(box_size=10, border=2)
-    qr.add_data(client.subscription_link)
-    qr.make(fit=True)
-
-    img = qr.make_image(fill_color="black", back_color="white")
-    buffer = BytesIO()
-    img.save(buffer, format="PNG")
-    buffer.seek(0)
-
-    photo = BufferedInputFile(
-        buffer.getvalue(),
-        filename="vless_qr.png",
-    )
-
-    await callback.message.answer_photo(
-        photo,
-        caption="QR-код вашей подписки.",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
-    )
-    await callback.answer()
-
-
-@router.message(Command("check_expiring"))
-async def cmd_check_expiring(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    clients = await get_expiring_clients(days=3)
-
-    if not clients:
-        await message.answer("Подписок, истекающих в ближайшие 3 дня, нет.")
-        return
-
-    lines = ["Подписки, истекающие в ближайшие 3 дня:\n"]
-    for client in clients:
-        paid_until = client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
-        lines.append(
-            f"ID={client.id} | tg={client.telegram_id} | "
-            f"{client.full_name or 'Без имени'} | до {paid_until}"
-        )
-
-    await message.answer("\n".join(lines))
