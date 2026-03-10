@@ -1,34 +1,10 @@
-# 🔐 Секреты и переменные окружения
-.env
-.env.local
-.env.*.local
-
-# 🗄 Базы данных SQLite
-*.db
-*.sqlite
-*.sqlite3
-data/*.db
-database/*.db
-
-# 🐍 Python кэш файлы
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-
-#  Виртуальное окружение
 venv/
-env/
-.venv/
-env.bak/
+__pycache__/
+*.pyc
+.env
 
-# 📝 Логи
-logs/
-*.log
+logs/*
+!logs/.gitkeep
 
-# 💻 IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
+database/*.db
+database/*.bak
