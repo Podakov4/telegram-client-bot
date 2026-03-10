@@ -10,6 +10,11 @@ from database.models import Client
 from keyboards.reply import main_reply_keyboard
 from services.client_access import create_vpn_access_for_client
 from services.payments import activate_subscription, deactivate_subscription
+from io import BytesIO
+import qrcode
+from aiogram.types import BufferedInputFile
+
+from services.subscriptions import get_expiring_clients
 
 router = Router()
 
@@ -44,6 +49,7 @@ def format_subscription_text(client: Client) -> str:
 def subscription_actions_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Показать ссылку", callback_data="show_vless_link")
+    builder.button(text="Показать QR", callback_data="show_vless_qr")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -202,7 +208,11 @@ async def help_message(message: Message):
         "• Мой профиль\n"
         "• Моя подписка\n"
         "• Оплата\n\n"
-        "После выбора тарифа подписка активируется автоматически.",
+        "В подписке доступны:\n"
+        "• Показать ссылку\n"
+        "• Показать QR\n\n"
+        "Для администратора:\n"
+        "• /check_expiring — проверить истекающие подписки",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
 
@@ -243,3 +253,56 @@ async def unpay_me(message: Message):
         "Подписка отключена.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )
+
+@router.callback_query(F.data == "show_vless_qr")
+async def cb_show_vless_qr(callback: CallbackQuery):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None or not client.subscription_link:
+        await callback.message.answer("Ссылка подписки не найдена.")
+        await callback.answer()
+        return
+
+    qr = qrcode.QRCode(box_size=10, border=2)
+    qr.add_data(client.subscription_link)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    photo = BufferedInputFile(
+        buffer.getvalue(),
+        filename="vless_qr.png",
+    )
+
+    await callback.message.answer_photo(
+        photo,
+        caption="QR-код вашей подписки.",
+        reply_markup=main_reply_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.message(Command("check_expiring"))
+async def cmd_check_expiring(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("Недостаточно прав.")
+        return
+
+    clients = await get_expiring_clients(days=3)
+
+    if not clients:
+        await message.answer("Подписок, истекающих в ближайшие 3 дня, нет.")
+        return
+
+    lines = ["Подписки, истекающие в ближайшие 3 дня:\n"]
+    for client in clients:
+        paid_until = client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
+        lines.append(
+            f"ID={client.id} | tg={client.telegram_id} | "
+            f"{client.full_name or 'Без имени'} | до {paid_until}"
+        )
+
+    await message.answer("\n".join(lines))
