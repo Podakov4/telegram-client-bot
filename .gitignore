@@ -6,5 +6,7 @@ __pycache__/
 logs/*
 !logs/.gitkeep
 
+clients.db
+data/
 database/*.db
 database/*.bak
