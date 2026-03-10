@@ -23,6 +23,8 @@ async def cmd_start(message: Message):
         )
         client = result.scalar_one_or_none()
 
+        is_new_user = client is None
+
         if client is None:
             client = Client(
                 telegram_id=telegram_id,
@@ -35,7 +37,21 @@ async def cmd_start(message: Message):
             session.add(client)
             await session.commit()
 
-    await message.answer(
-        "Добро пожаловать. Выберите действие в меню.",
-        reply_markup=main_reply_keyboard(message.from_user.id),
-    )
+    if is_new_user:
+        await message.answer(
+            f"Здравствуйте, {full_name}!\n\n"
+            "Добро пожаловать в Freeth VPN.\n\n"
+            "Здесь вы можете:\n"
+            "• активировать пробный период на 7 дней\n"
+            "• оформить подписку\n"
+            "• получить VLESS-ссылку и QR-код\n"
+            "• продлить доступ в пару нажатий\n\n"
+            "Начните с кнопок ниже.",
+            reply_markup=main_reply_keyboard(message.from_user.id),
+        )
+    else:
+        await message.answer(
+            f"С возвращением, {full_name}!\n\n"
+            "Выберите действие в меню ниже.",
+            reply_markup=main_reply_keyboard(message.from_user.id),
+        )
