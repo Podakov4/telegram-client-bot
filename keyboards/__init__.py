@@ -1,4 +1,3 @@
-# keyboards/__init__.py
-from . import inline, reply
+from .reply import main_reply_keyboard
 
-__all__ = ['inline', 'reply']
+__all__ = ["main_reply_keyboard"]
