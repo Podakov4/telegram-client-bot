@@ -18,7 +18,11 @@ from database.db import AsyncSessionLocal
 from database.models import Client
 from keyboards.reply import main_reply_keyboard
 from services.client_access import create_vpn_access_for_client
-from services.payments import activate_subscription, deactivate_subscription
+from services.payments import (
+    activate_subscription,
+    activate_trial_subscription,
+    deactivate_subscription,
+)
 from services.subscriptions import get_expiring_clients
 
 router = Router()
@@ -39,6 +43,8 @@ def format_profile_text(client: Client) -> str:
         paid_until_text = "Не указано"
         days_left_text = "Не указано"
 
+    trial_used = "Да" if client.notes and "trial_used=true" in client.notes else "Нет"
+
     return (
         f"Ваш профиль:\n\n"
         f"ID: {client.id}\n"
@@ -48,14 +54,15 @@ def format_profile_text(client: Client) -> str:
         f"UUID: {client.xui_uuid or 'Не назначен'}\n"
         f"Активен: {active_text}\n"
         f"Оплачено: {paid_text}\n"
-        f"Оплачено до: {paid_until_text}\n"
+        f"Пробный использован: {trial_used}\n"
+        f"Активно до: {paid_until_text}\n"
         f"Осталось: {days_left_text}\n"
     )
 
 
 def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
-        return "У вас пока нет ссылки подписки.\nСначала оплатите подписку."
+        return "У вас пока нет ссылки подписки.\nСначала активируйте пробный период или оплатите подписку."
 
     return "Подписка готова.\n\nВыберите действие ниже."
 
@@ -64,6 +71,7 @@ def subscription_actions_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Показать ссылку", callback_data="show_vless_link")
     builder.button(text="Показать QR", callback_data="show_vless_qr")
+    builder.button(text="Продлить подписку", callback_data="open_payment_menu")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -223,6 +231,46 @@ async def cb_show_vless_qr(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data == "open_payment_menu")
+async def cb_open_payment_menu(callback: CallbackQuery):
+    await callback.message.answer(
+        "Выберите тариф:\n\n"
+        f"• 1 месяц — {PRICE_1_MONTH}\n"
+        "  Подходит для первого знакомства\n\n"
+        f"• 3 месяца — {PRICE_3_MONTHS}\n"
+        "  Оптимальный вариант\n\n"
+        f"• 12 месяцев — {PRICE_12_MONTHS}\n"
+        "  Самый выгодный тариф\n",
+        reply_markup=payment_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(F.text == "Пробный период 7 дней")
+async def trial_period(message: Message):
+    ok, text = await activate_trial_subscription(str(message.from_user.id), days=7)
+
+    if not ok:
+        await message.answer(
+            text,
+            reply_markup=main_reply_keyboard(message.from_user.id),
+        )
+        return
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+
+    await message.answer(
+        "Пробный период на 7 дней активирован.",
+        reply_markup=main_reply_keyboard(message.from_user.id),
+    )
+
+    if client and client.subscription_link:
+        await message.answer(
+            "Ссылка готова:",
+            reply_markup=subscription_actions_keyboard(),
+        )
+
+
 @router.message(F.text == "Оплата")
 async def payment_menu(message: Message):
     await message.answer(
@@ -300,10 +348,12 @@ async def help_message(message: Message):
         "Доступные действия:\n"
         "• Мой профиль\n"
         "• Моя подписка\n"
+        "• Пробный период 7 дней\n"
         "• Оплата\n\n"
         "В подписке доступны:\n"
         "• Показать ссылку\n"
-        "• Показать QR\n\n"
+        "• Показать QR\n"
+        "• Продлить подписку\n\n"
         "Для администратора:\n"
         "• /check_expiring — проверить истекающие подписки",
         reply_markup=main_reply_keyboard(message.from_user.id),

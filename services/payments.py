@@ -45,6 +45,37 @@ async def activate_subscription(telegram_id: str, months: int) -> bool:
     return True
 
 
+async def activate_trial_subscription(telegram_id: str, days: int = 7) -> tuple[bool, str]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
+        )
+        client = result.scalar_one_or_none()
+
+        if client is None:
+            return False, "Клиент не найден."
+
+        notes = client.notes or ""
+        if "trial_used=true" in notes:
+            return False, "Пробный период уже был использован."
+
+        now = datetime.utcnow()
+        client.paid_until = now + timedelta(days=days)
+        client.is_paid = False
+        client.is_active = True
+        client.updated_at = now
+
+        if notes:
+            notes += "\n"
+        notes += "trial_used=true"
+        client.notes = notes
+
+        await session.commit()
+
+    await create_vpn_access_for_client(telegram_id)
+    return True, "Пробный период активирован."
+
+
 async def deactivate_subscription(telegram_id: str) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
