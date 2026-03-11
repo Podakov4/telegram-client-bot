@@ -218,16 +218,18 @@ async def cb_show_vless_qr(callback: CallbackQuery):
 @router.callback_query(F.data == "open_payment_menu")
 async def cb_open_payment_menu(callback: CallbackQuery):
     await callback.message.answer(
-        "Выберите тариф:\n\n"
+        "Freeth VPN\n\n"
+        "Сервис защищенного сетевого подключения для личного использования.\n"
+        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности соединения "
+        "и безопасной работы в интернете.\n\n"
+        "Тарифы:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
-        "  Подходит для первого знакомства\n\n"
-        f"• 3 месяца — {PRICE_3_MONTHS}\n"
-        "  Оптимальный вариант\n\n"
-        f"• 12 месяцев — {PRICE_12_MONTHS}\n"
-        "  Самый выгодный тариф\n",
+        "• 3 месяца — {PRICE_3_MONTHS}\n"
+        "• 12 месяцев — {PRICE_12_MONTHS}\n\n"
+        "Также доступен пробный период 7 дней.\n\n"
+        "Нажмите на нужный тариф ниже:",
         reply_markup=payment_keyboard(),
     )
-    await callback.answer()
 
 
 @router.message(F.text == "Пробный период 7 дней")
@@ -258,13 +260,16 @@ async def trial_period(message: Message):
 @router.message(F.text == "Оплата")
 async def payment_menu(message: Message):
     await message.answer(
-        "Выберите тариф:\n\n"
+        "Freeth VPN\n\n"
+        "Сервис защищенного сетевого подключения для личного использования.\n"
+        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности соединения "
+        "и безопасной работы в интернете.\n\n"
+        "Тарифы:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
-        "  Подходит для первого знакомства\n\n"
-        f"• 3 месяца — {PRICE_3_MONTHS}\n"
-        "  Оптимальный вариант\n\n"
-        f"• 12 месяцев — {PRICE_12_MONTHS}\n"
-        "  Самый выгодный тариф\n",
+        "• 3 месяца — {PRICE_3_MONTHS}\n"
+        "• 12 месяцев — {PRICE_12_MONTHS}\n\n"
+        "Также доступен пробный период 7 дней.\n\n"
+        "Нажмите на нужный тариф ниже:",
         reply_markup=payment_keyboard(),
     )
 
@@ -362,6 +367,7 @@ async def help_message(message: Message):
             "• Пробный период 7 дней\n"
             "• Оплата\n"
             "• Инструкции\n"
+            "• Документы\n"
             "• Поддержка\n\n"
             "В подписке доступны:\n"
             "• Показать ссылку\n"
@@ -383,6 +389,7 @@ async def help_message(message: Message):
             "• Пробный период 7 дней\n"
             "• Оплата\n"
             "• Инструкции\n"
+            "• Документы\n"
             "• Поддержка\n\n"
             "В подписке доступны:\n"
             "• Показать ссылку\n"
