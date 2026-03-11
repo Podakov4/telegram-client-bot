@@ -2,9 +2,11 @@ from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from io import StringIO, BytesIO
 from sqlalchemy import select, or_, func
+import csv
 
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
@@ -12,6 +14,8 @@ from database.models import Client, SubscriptionHistory
 from services.client_access import create_vpn_access_for_client
 from services.payments import activate_subscription, deactivate_subscription
 from services.subscriptions import get_expiring_clients, get_expired_clients
+
+
 
 router = Router()
 
@@ -650,3 +654,70 @@ async def cb_admin_dashboard_stats(callback: CallbackQuery):
         reply_markup=admin_dashboard_keyboard(),
     )
     await callback.answer()
+
+@router.message(Command("export_clients"))
+async def cmd_export_clients(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.")
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).order_by(Client.id.asc())
+        )
+        clients = list(result.scalars().all())
+
+    if not clients:
+        await message.answer("Клиентов для экспорта нет.")
+        return
+
+    output = StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "id",
+        "telegram_id",
+        "full_name",
+        "login",
+        "xui_email",
+        "xui_uuid",
+        "is_active",
+        "is_paid",
+        "paid_until",
+        "trial_used",
+        "subscription_link",
+        "created_at",
+        "updated_at",
+    ])
+
+    for client in clients:
+        trial_used = "true" if client.notes and "trial_used=true" in client.notes else "false"
+
+        writer.writerow([
+            client.id,
+            client.telegram_id,
+            client.full_name or "",
+            client.login or "",
+            client.xui_email or "",
+            client.xui_uuid or "",
+            client.is_active,
+            client.is_paid,
+            client.paid_until.isoformat(sep=" ") if client.paid_until else "",
+            trial_used,
+            client.subscription_link or "",
+            client.created_at.isoformat(sep=" ") if client.created_at else "",
+            client.updated_at.isoformat(sep=" ") if client.updated_at else "",
+        ])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    output.close()
+
+    file = BufferedInputFile(
+        csv_bytes,
+        filename="clients_export.csv",
+    )
+
+    await message.answer_document(
+        file,
+        caption=f"Экспорт клиентов: {len(clients)} записей",
+    )
