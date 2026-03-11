@@ -121,9 +121,12 @@ async def start_checkout(callback: CallbackQuery, months: int):
 
     await callback.message.answer(
         "Платеж создан.\n\n"
+        "Чтобы активировать подписку:\n"
         "1. Нажмите «Перейти к оплате»\n"
-        "2. После успешной оплаты вернитесь в бот\n"
-        "3. Нажмите «Проверить оплату»",
+        "2. Завершите оплату на стороне ЮKassa\n"
+        "3. Вернитесь в бот\n"
+        "4. Нажмите «Проверить оплату»\n\n"
+        "После подтверждения подписка активируется автоматически.",
         reply_markup=payment_checkout_keyboard(payment_url, payment_id),
     )
     await callback.answer()
@@ -218,16 +221,16 @@ async def cb_show_vless_qr(callback: CallbackQuery):
 @router.callback_query(F.data == "open_payment_menu")
 async def cb_open_payment_menu(callback: CallbackQuery):
     await callback.message.answer(
-        "Freeth VPN\n\n"
+        "Freeth\n\n"
         "Сервис защищенного сетевого подключения для личного использования.\n"
-        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности соединения "
-        "и безопасной работы в интернете.\n\n"
+        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности "
+        "соединения и безопасной работы в интернете.\n\n"
         "Тарифы:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
-        "• 3 месяца — {PRICE_3_MONTHS}\n"
-        "• 12 месяцев — {PRICE_12_MONTHS}\n\n"
+        f"• 3 месяца — {PRICE_3_MONTHS}\n"
+        f"• 12 месяцев — {PRICE_12_MONTHS}\n\n"
         "Также доступен пробный период 7 дней.\n\n"
-        "Нажмите на нужный тариф ниже:",
+        "Выберите подходящий тариф ниже.",
         reply_markup=payment_keyboard(),
     )
 
@@ -260,16 +263,16 @@ async def trial_period(message: Message):
 @router.message(F.text == "Оплата")
 async def payment_menu(message: Message):
     await message.answer(
-        "Freeth VPN\n\n"
+        "Freeth\n\n"
         "Сервис защищенного сетевого подключения для личного использования.\n"
-        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности соединения "
-        "и безопасной работы в интернете.\n\n"
+        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности "
+        "соединения и безопасной работы в интернете.\n\n"
         "Тарифы:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
-        "• 3 месяца — {PRICE_3_MONTHS}\n"
-        "• 12 месяцев — {PRICE_12_MONTHS}\n\n"
+        f"• 3 месяца — {PRICE_3_MONTHS}\n"
+        f"• 12 месяцев — {PRICE_12_MONTHS}\n\n"
         "Также доступен пробный период 7 дней.\n\n"
-        "Нажмите на нужный тариф ниже:",
+        "Выберите подходящий тариф ниже.",
         reply_markup=payment_keyboard(),
     )
 

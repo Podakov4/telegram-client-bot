@@ -31,14 +31,14 @@ def support_faq_keyboard():
 @router.message(F.text == "Поддержка")
 async def support_message(message: Message):
     await message.answer(
-        "Поддержка:\n\n"
+        "Поддержка\n\n"
         f"Связь: {SUPPORT_USERNAME}\n\n"
-        "Если что-то не работает, напишите в поддержку и сразу приложите:\n"
+        "Если возникла проблема, сразу приложите:\n"
         "• ваш Telegram ID или имя в боте\n"
         "• описание проблемы\n"
-        "• скриншот ошибки, если она есть\n"
+        "• скриншот ошибки, если он есть\n"
         "• устройство: iPhone / Android / Windows / Mac\n\n"
-        "Также можно открыть частые проблемы ниже.",
+        "Также можно открыть инструкции или частые вопросы ниже.",
         reply_markup=support_keyboard(),
     )
 

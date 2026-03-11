@@ -17,7 +17,11 @@ def documents_keyboard():
 @router.message(F.text == "Документы")
 async def documents_menu(message: Message):
     await message.answer(
-        "Документы сервиса:\n\nВыберите нужный раздел ниже.",
+        "Документы сервиса:\n\n"
+        "Здесь доступны:\n"
+        "• пользовательское соглашение\n"
+        "• политика возвратов\n"
+        "• политика конфиденциальности",
         reply_markup=documents_keyboard(),
     )
 
