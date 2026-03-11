@@ -22,6 +22,12 @@ from services.payments import (
     activate_trial_subscription,
 )
 from services.subscriptions import get_expiring_clients
+from services.payments import (
+    activate_subscription,
+    activate_trial_subscription,
+    create_checkout_payment,
+    confirm_checkout_payment,
+)
 
 router = Router()
 
@@ -86,6 +92,13 @@ def renewal_keyboard():
     builder.adjust(1)
     return builder.as_markup()
 
+def payment_checkout_keyboard(payment_url: str, payment_id: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Перейти к оплате", url=payment_url)
+    builder.button(text="Проверить оплату", callback_data=f"check_pay:{payment_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
 
 async def get_client_by_telegram_id(telegram_id: str):
     async with AsyncSessionLocal() as session:
@@ -145,6 +158,30 @@ async def process_payment(
                 "Ссылка готова:",
                 reply_markup=subscription_actions_keyboard(),
             )
+
+async def start_checkout(callback: CallbackQuery, months: int):
+    telegram_id = str(callback.from_user.id)
+    full_name = callback.from_user.full_name
+
+    try:
+        payment_id, payment_url = await create_checkout_payment(
+            telegram_id=telegram_id,
+            full_name=full_name,
+            months=months,
+        )
+    except Exception as e:
+        await callback.message.answer(f"Не удалось создать платеж: {e}")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "Платеж создан.\n\n"
+        "1. Нажмите «Перейти к оплате»\n"
+        "2. После успешной оплаты вернитесь в бот\n"
+        "3. Нажмите «Проверить оплату»",
+        reply_markup=payment_checkout_keyboard(payment_url, payment_id),
+    )
+    await callback.answer()
 
 
 @router.message(Command("profile"))
@@ -289,32 +326,17 @@ async def payment_menu(message: Message):
 
 @router.callback_query(F.data == "pay_1_month")
 async def cb_pay_1_month(callback: CallbackQuery):
-    await process_payment(
-        callback,
-        telegram_id=str(callback.from_user.id),
-        months=1,
-        user_id=callback.from_user.id,
-    )
+    await start_checkout(callback, months=1)
 
 
 @router.callback_query(F.data == "pay_3_months")
 async def cb_pay_3_months(callback: CallbackQuery):
-    await process_payment(
-        callback,
-        telegram_id=str(callback.from_user.id),
-        months=3,
-        user_id=callback.from_user.id,
-    )
+    await start_checkout(callback, months=3)
 
 
 @router.callback_query(F.data == "pay_12_months")
 async def cb_pay_12_months(callback: CallbackQuery):
-    await process_payment(
-        callback,
-        telegram_id=str(callback.from_user.id),
-        months=12,
-        user_id=callback.from_user.id,
-    )
+    await start_checkout(callback, months=12)
 
 
 @router.message(Command("check_expiring"))
@@ -407,3 +429,18 @@ async def help_message(message: Message):
             "• Продлить подписку",
             reply_markup=main_reply_keyboard(message.from_user.id),
         )
+
+@router.callback_query(F.data.startswith("check_pay:"))
+async def cb_check_pay(callback: CallbackQuery):
+    payment_id = callback.data.split(":", 1)[1]
+
+    ok, text = await confirm_checkout_payment(
+        telegram_id=str(callback.from_user.id),
+        payment_id=payment_id,
+    )
+
+    await callback.message.answer(
+        text,
+        reply_markup=main_reply_keyboard(callback.from_user.id),
+    )
+    await callback.answer()

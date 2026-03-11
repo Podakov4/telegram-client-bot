@@ -56,3 +56,24 @@ class SubscriptionHistory(Base):
     notes = Column(Text, nullable=True)
 
     client = relationship("Client", back_populates="history")
+
+class YooKassaPayment(Base):
+    __tablename__ = "yookassa_payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    external_payment_id = Column(String, unique=True, nullable=False, index=True)
+    telegram_id = Column(String, nullable=False, index=True)
+    months = Column(Integer, nullable=False)
+    amount = Column(String, nullable=False)
+
+    status = Column(String, default="pending", nullable=False)
+    is_processed = Column(Boolean, default=False, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+    processed_at = Column(DateTime, nullable=True)

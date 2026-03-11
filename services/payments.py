@@ -6,6 +6,14 @@ from database.db import AsyncSessionLocal
 from database.models import Client, SubscriptionHistory
 from services.client_access import create_vpn_access_for_client
 
+from config import (
+    YOOKASSA_AMOUNT_1_MONTH,
+    YOOKASSA_AMOUNT_3_MONTHS,
+    YOOKASSA_AMOUNT_12_MONTHS,
+)
+from database.models import YooKassaPayment
+from services.yookassa import create_payment as yk_create_payment, get_payment as yk_get_payment
+
 
 def add_months_as_days(months: int) -> int:
     if months == 1:
@@ -122,3 +130,78 @@ async def deactivate_subscription(telegram_id: str) -> bool:
         await session.commit()
 
     return True
+
+def get_amount_by_months(months: int) -> str:
+    if months == 1:
+        return YOOKASSA_AMOUNT_1_MONTH
+    if months == 3:
+        return YOOKASSA_AMOUNT_3_MONTHS
+    if months == 12:
+        return YOOKASSA_AMOUNT_12_MONTHS
+    raise ValueError(f"Unsupported months value: {months}")
+
+
+async def create_checkout_payment(telegram_id: str, full_name: str | None, months: int):
+    amount = get_amount_by_months(months)
+    description = f"Freeth VPN: {months} мес. для {full_name or telegram_id}"
+
+    payment = await yk_create_payment(
+        amount=amount,
+        description=description,
+        telegram_id=telegram_id,
+        months=months,
+    )
+
+    payment_id = payment["id"]
+    confirmation_url = payment["confirmation"]["confirmation_url"]
+    status = payment["status"]
+
+    async with AsyncSessionLocal() as session:
+        row = YooKassaPayment(
+            external_payment_id=payment_id,
+            telegram_id=telegram_id,
+            months=months,
+            amount=amount,
+            status=status,
+            is_processed=False,
+        )
+        session.add(row)
+        await session.commit()
+
+    return payment_id, confirmation_url
+
+
+async def confirm_checkout_payment(telegram_id: str, payment_id: str) -> tuple[bool, str]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(YooKassaPayment).where(
+                YooKassaPayment.external_payment_id == payment_id,
+                YooKassaPayment.telegram_id == telegram_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+
+        if row is None:
+            return False, "Платеж не найден."
+
+        if row.is_processed:
+            return True, "Этот платеж уже был обработан раньше."
+
+        payment = await yk_get_payment(payment_id)
+        row.status = payment.get("status", row.status)
+
+        if payment.get("status") != "succeeded":
+            await session.commit()
+            return False, f"Текущий статус платежа: {payment.get('status', 'unknown')}"
+
+        ok = await activate_subscription(telegram_id, row.months)
+        if not ok:
+            await session.commit()
+            return False, "Оплата прошла, но не удалось активировать подписку."
+
+        row.is_processed = True
+        row.status = "succeeded"
+        row.processed_at = datetime.utcnow()
+        await session.commit()
+
+        return True, "Оплата подтверждена, подписка активирована."
