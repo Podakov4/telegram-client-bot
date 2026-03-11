@@ -7,7 +7,13 @@ from aiogram.enums import ParseMode
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 import config
-from services.subscriptions import get_expiring_clients
+from services.subscriptions import (
+    get_expiring_clients_for_notice,
+    get_expired_clients_for_notice,
+    mark_expiring_notice_sent,
+    mark_expired_notice_sent,
+    disable_expired_subscriptions,
+)
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
@@ -29,16 +35,16 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
 
-    clients = await get_expiring_clients(days=3)
+    disabled_count = await disable_expired_subscriptions()
+    logger.info("Автоотключено просроченных подписок: %s", disabled_count)
 
-    if not clients:
-        logger.info("Нет подписок, истекающих в ближайшие 3 дня.")
-        await bot.session.close()
-        return
+    expiring_clients = await get_expiring_clients_for_notice(days=3)
+    expired_clients = await get_expired_clients_for_notice()
 
-    sent_count = 0
+    sent_expiring = 0
+    sent_expired = 0
 
-    for client in clients:
+    for client in expiring_clients:
         try:
             paid_until = (
                 client.paid_until.strftime("%Y-%m-%d %H:%M")
@@ -57,17 +63,46 @@ async def main():
                 text=text,
                 reply_markup=renewal_keyboard(),
             )
-            sent_count += 1
-            logger.info("Напоминание отправлено telegram_id=%s", client.telegram_id)
+            await mark_expiring_notice_sent(client.id)
+            sent_expiring += 1
+            logger.info("Предупреждение отправлено telegram_id=%s", client.telegram_id)
 
         except Exception as e:
             logger.exception(
-                "Не удалось отправить напоминание telegram_id=%s: %s",
+                "Не удалось отправить предупреждение telegram_id=%s: %s",
                 client.telegram_id,
                 e,
             )
 
-    logger.info("Готово. Отправлено напоминаний: %s", sent_count)
+    for client in expired_clients:
+        try:
+            text = (
+                f"Здравствуйте, {client.full_name or 'пользователь'}!\n\n"
+                "Срок действия вашей подписки истек.\n\n"
+                "Чтобы восстановить доступ, продлите подписку."
+            )
+
+            await bot.send_message(
+                chat_id=int(client.telegram_id),
+                text=text,
+                reply_markup=renewal_keyboard(),
+            )
+            await mark_expired_notice_sent(client.id)
+            sent_expired += 1
+            logger.info("Сообщение об истечении отправлено telegram_id=%s", client.telegram_id)
+
+        except Exception as e:
+            logger.exception(
+                "Не удалось отправить сообщение об истечении telegram_id=%s: %s",
+                client.telegram_id,
+                e,
+            )
+
+    logger.info(
+        "Готово. Предупреждений: %s, сообщений об истечении: %s",
+        sent_expiring,
+        sent_expired,
+    )
     await bot.session.close()
 
 
