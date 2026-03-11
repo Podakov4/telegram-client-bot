@@ -13,6 +13,9 @@ def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         ],
         [
             KeyboardButton(text="Инструкции"),
+            KeyboardButton(text="Поддержка"),
+        ],
+        [
             KeyboardButton(text="Помощь"),
         ],
     ]

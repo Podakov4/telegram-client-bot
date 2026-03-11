@@ -2,7 +2,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from keyboards.reply import main_reply_keyboard
 
 router = Router()
 
@@ -110,3 +109,12 @@ async def instr_mac(callback: CallbackQuery):
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
+
+    @router.callback_query(F.data == "open_instructions_from_support")
+    async def open_instructions_from_support(callback: CallbackQuery):
+        await callback.message.answer(
+            "Выберите платформу:\n\n"
+            "Я покажу, какое приложение установить и как импортировать конфиг.",
+            reply_markup=instructions_keyboard(),
+        )
+        await callback.answer()

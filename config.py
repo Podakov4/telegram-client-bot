@@ -14,6 +14,9 @@ def get_env(name: str, default: str | None = None, required: bool = False) -> st
 BOT_TOKEN = get_env("BOT_TOKEN", required=True)
 DATABASE_URL = get_env("DATABASE_URL", required=True)
 
+SUPPORT_USERNAME = get_env("SUPPORT_USERNAME", "@your_support")
+SUPPORT_URL = get_env("SUPPORT_URL", "https://t.me/your_support")
+
 XUI_BASE_URL = get_env("XUI_BASE_URL", required=True).rstrip("/")
 XUI_WEB_BASE_PATH = get_env("XUI_WEB_BASE_PATH", "").strip("/")
 XUI_USERNAME = get_env("XUI_USERNAME", required=True)
