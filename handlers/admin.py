@@ -276,9 +276,10 @@ async def cb_admin_dashboard_find_help(callback: CallbackQuery):
 
     await callback.message.answer(
         "Поиск клиента:\n\n"
-        "• /find 766928002\n"
-        "• /find 1\n"
-        "• /find Константин"
+        "• <code>/find [telegram_id | id | имя]</code>\n"
+        "• <code>/find 766928002</code>\n"
+        "• <code>/find 1</code>\n"
+        "• <code>/find Константин</code>"
     )
     await callback.answer()
 
@@ -387,9 +388,7 @@ async def cb_admin_notify_expiring(callback: CallbackQuery, bot: Bot):
             failed += 1
 
     await callback.message.answer(
-        f"Готово.\n\n"
-        f"Напоминаний отправлено: {sent}\n"
-        f"Ошибок: {failed}"
+        f"Готово.\n\nНапоминаний отправлено: {sent}\nОшибок: {failed}"
     )
     await callback.answer()
 
@@ -418,9 +417,7 @@ async def cb_admin_notify_expired(callback: CallbackQuery, bot: Bot):
             failed += 1
 
     await callback.message.answer(
-        f"Готово.\n\n"
-        f"Сообщений отправлено: {sent}\n"
-        f"Ошибок: {failed}"
+        f"Готово.\n\nСообщений отправлено: {sent}\nОшибок: {failed}"
     )
     await callback.answer()
 

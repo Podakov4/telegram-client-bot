@@ -8,7 +8,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from database import create_tables
-from handlers import common, client, menu, admin
+from handlers import common, client, menu, admin, instructions
 import config
 
 logging.basicConfig(
@@ -33,6 +33,7 @@ async def main():
     dp.include_router(client.router)
     dp.include_router(menu.router)
     dp.include_router(admin.router)
+    dp.include_router(instructions.router)
 
     await bot.delete_webhook(drop_pending_updates=True)
 

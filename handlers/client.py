@@ -17,11 +17,9 @@ from config import (
 from database.db import AsyncSessionLocal
 from database.models import Client
 from keyboards.reply import main_reply_keyboard
-from services.client_access import create_vpn_access_for_client
 from services.payments import (
     activate_subscription,
     activate_trial_subscription,
-    deactivate_subscription,
 )
 from services.subscriptions import get_expiring_clients
 
@@ -35,10 +33,7 @@ def format_profile_text(client: Client) -> str:
     if client.paid_until:
         paid_until_text = client.paid_until.strftime("%Y-%m-%d %H:%M")
         days_left = (client.paid_until - datetime.utcnow()).days
-        if days_left < 0:
-            days_left_text = "Истекла"
-        else:
-            days_left_text = f"{days_left} дн."
+        days_left_text = "Истекла" if days_left < 0 else f"{days_left} дн."
     else:
         paid_until_text = "Не указано"
         days_left_text = "Не указано"
@@ -81,15 +76,6 @@ def payment_keyboard():
     builder.button(text=f"1 месяц — {PRICE_1_MONTH}", callback_data="pay_1_month")
     builder.button(text=f"3 месяца — {PRICE_3_MONTHS}", callback_data="pay_3_months")
     builder.button(text=f"12 месяцев — {PRICE_12_MONTHS}", callback_data="pay_12_months")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-def admin_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Проверить истекающие", callback_data="admin_check_expiring")
-    builder.button(text="Создать доступ себе", callback_data="admin_create_access_me")
-    builder.button(text="Отключить свою подписку", callback_data="admin_disable_me")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -159,18 +145,6 @@ async def process_payment(
                 "Ссылка готова:",
                 reply_markup=subscription_actions_keyboard(),
             )
-
-
-@router.message(Command("admin"))
-async def admin_menu(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("Недостаточно прав.")
-        return
-
-    await message.answer(
-        "Админ-меню:",
-        reply_markup=admin_keyboard(),
-    )
 
 
 @router.message(Command("profile"))
@@ -395,71 +369,6 @@ async def cmd_preview_expiring(message: Message):
         )
 
 
-@router.callback_query(F.data == "admin_check_expiring")
-async def cb_admin_check_expiring(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("Недостаточно прав.", show_alert=True)
-        return
-
-    clients = await get_expiring_clients(days=3)
-
-    if not clients:
-        await callback.message.answer("Подписок, истекающих в ближайшие 3 дня, нет.")
-        await callback.answer()
-        return
-
-    lines = ["Подписки, истекающие в ближайшие 3 дня:\n"]
-    for client in clients:
-        paid_until = (
-            client.paid_until.strftime("%Y-%m-%d %H:%M")
-            if client.paid_until
-            else "Не указано"
-        )
-        lines.append(
-            f"ID={client.id} | tg={client.telegram_id} | "
-            f"{client.full_name or 'Без имени'} | до {paid_until}"
-        )
-
-    await callback.message.answer("\n".join(lines))
-    await callback.answer()
-
-
-@router.callback_query(F.data == "admin_create_access_me")
-async def cb_admin_create_access_me(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("Недостаточно прав.", show_alert=True)
-        return
-
-    telegram_id = str(callback.from_user.id)
-    ok = await create_vpn_access_for_client(telegram_id)
-
-    if not ok:
-        await callback.message.answer("Не удалось создать доступ.")
-        await callback.answer()
-        return
-
-    await callback.message.answer("Доступ создан.")
-    await callback.answer("Готово")
-
-
-@router.callback_query(F.data == "admin_disable_me")
-async def cb_admin_disable_me(callback: CallbackQuery):
-    if callback.from_user.id not in ADMIN_IDS:
-        await callback.answer("Недостаточно прав.", show_alert=True)
-        return
-
-    telegram_id = str(callback.from_user.id)
-    ok = await deactivate_subscription(telegram_id)
-
-    if not ok:
-        await callback.message.answer("Не удалось отключить подписку.")
-        await callback.answer()
-        return
-
-    await callback.message.answer("Подписка отключена.")
-    await callback.answer("Готово")
-
-
 @router.message(F.text == "Помощь")
 async def help_message(message: Message):
     if message.from_user.id in ADMIN_IDS:
@@ -467,7 +376,8 @@ async def help_message(message: Message):
             "Доступные действия:\n"
             "• Мой профиль\n"
             "• Моя подписка\n"
-            "• Пробный период 7 дней\n"
+            "• Пробный период 7 дней\n"            
+            "• Инструкции\n"
             "• Оплата\n\n"
             "В подписке доступны:\n"
             "• Показать ссылку\n"
@@ -475,7 +385,7 @@ async def help_message(message: Message):
             "• Продлить подписку\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
-            "• <code>/find [telegram_id | id | имя]</code> — найти клиента\n"
+            "• /find [telegram_id | id | имя] — найти клиента\n"
             "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
             "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
             reply_markup=main_reply_keyboard(message.from_user.id),
@@ -485,7 +395,8 @@ async def help_message(message: Message):
             "Доступные действия:\n"
             "• Мой профиль\n"
             "• Моя подписка\n"
-            "• Пробный период 7 дней\n"
+            "• Пробный период 7 дней\n"            
+            "• Инструкции\n"
             "• Оплата\n\n"
             "В подписке доступны:\n"
             "• Показать ссылку\n"
