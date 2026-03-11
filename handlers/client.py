@@ -3,8 +3,8 @@ from io import BytesIO
 
 import qrcode
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.filters import Command
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
@@ -18,16 +18,11 @@ from database.db import AsyncSessionLocal
 from database.models import Client
 from keyboards.reply import main_reply_keyboard
 from services.payments import (
-    activate_subscription,
-    activate_trial_subscription,
-)
-from services.subscriptions import get_expiring_clients
-from services.payments import (
-    activate_subscription,
     activate_trial_subscription,
     create_checkout_payment,
     confirm_checkout_payment,
 )
+from services.subscriptions import get_expiring_clients
 
 router = Router()
 
@@ -86,16 +81,17 @@ def payment_keyboard():
     return builder.as_markup()
 
 
-def renewal_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Продлить подписку", callback_data="open_payment_menu")
-    builder.adjust(1)
-    return builder.as_markup()
-
 def payment_checkout_keyboard(payment_url: str, payment_id: str):
     builder = InlineKeyboardBuilder()
     builder.button(text="Перейти к оплате", url=payment_url)
     builder.button(text="Проверить оплату", callback_data=f"check_pay:{payment_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def renewal_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Продлить подписку", callback_data="open_payment_menu")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -107,57 +103,6 @@ async def get_client_by_telegram_id(telegram_id: str):
         )
         return result.scalar_one_or_none()
 
-
-async def process_payment(
-    message_or_callback,
-    telegram_id: str,
-    months: int,
-    user_id: int,
-):
-    ok = await activate_subscription(telegram_id, months=months)
-    if not ok:
-        text = "Не удалось активировать подписку."
-        if isinstance(message_or_callback, CallbackQuery):
-            await message_or_callback.message.answer(text)
-            await message_or_callback.answer()
-        else:
-            await message_or_callback.answer(text)
-        return
-
-    client = await get_client_by_telegram_id(telegram_id)
-
-    if months == 1:
-        plan_name = "1 месяц"
-    elif months == 3:
-        plan_name = "3 месяца"
-    elif months == 12:
-        plan_name = "12 месяцев"
-    else:
-        plan_name = f"{months} мес."
-
-    text = f"Тариф «{plan_name}» активирован."
-
-    if isinstance(message_or_callback, CallbackQuery):
-        await message_or_callback.message.answer(
-            text,
-            reply_markup=main_reply_keyboard(user_id),
-        )
-        if client and client.subscription_link:
-            await message_or_callback.message.answer(
-                "Ссылка готова:",
-                reply_markup=subscription_actions_keyboard(),
-            )
-        await message_or_callback.answer("Оплата активирована")
-    else:
-        await message_or_callback.answer(
-            text,
-            reply_markup=main_reply_keyboard(user_id),
-        )
-        if client and client.subscription_link:
-            await message_or_callback.answer(
-                "Ссылка готова:",
-                reply_markup=subscription_actions_keyboard(),
-            )
 
 async def start_checkout(callback: CallbackQuery, months: int):
     telegram_id = str(callback.from_user.id)
@@ -339,6 +284,22 @@ async def cb_pay_12_months(callback: CallbackQuery):
     await start_checkout(callback, months=12)
 
 
+@router.callback_query(F.data.startswith("check_pay:"))
+async def cb_check_pay(callback: CallbackQuery):
+    payment_id = callback.data.split(":", 1)[1]
+
+    ok, text = await confirm_checkout_payment(
+        telegram_id=str(callback.from_user.id),
+        payment_id=payment_id,
+    )
+
+    await callback.message.answer(
+        text,
+        reply_markup=main_reply_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
+
+
 @router.message(Command("check_expiring"))
 async def cmd_check_expiring(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -398,10 +359,10 @@ async def help_message(message: Message):
             "Доступные действия:\n"
             "• Мой профиль\n"
             "• Моя подписка\n"
-            "• Пробный период 7 дней\n"            
+            "• Пробный период 7 дней\n"
+            "• Оплата\n"
             "• Инструкции\n"
-            "• Поддержка\n"
-            "• Оплата\n\n"
+            "• Поддержка\n\n"
             "В подписке доступны:\n"
             "• Показать ссылку\n"
             "• Показать QR\n"
@@ -419,28 +380,13 @@ async def help_message(message: Message):
             "Доступные действия:\n"
             "• Мой профиль\n"
             "• Моя подписка\n"
-            "• Пробный период 7 дней\n"            
+            "• Пробный период 7 дней\n"
+            "• Оплата\n"
             "• Инструкции\n"
-            "• Поддержка\n"
-            "• Оплата\n\n"
+            "• Поддержка\n\n"
             "В подписке доступны:\n"
             "• Показать ссылку\n"
             "• Показать QR\n"
             "• Продлить подписку",
             reply_markup=main_reply_keyboard(message.from_user.id),
         )
-
-@router.callback_query(F.data.startswith("check_pay:"))
-async def cb_check_pay(callback: CallbackQuery):
-    payment_id = callback.data.split(":", 1)[1]
-
-    ok, text = await confirm_checkout_payment(
-        telegram_id=str(callback.from_user.id),
-        payment_id=payment_id,
-    )
-
-    await callback.message.answer(
-        text,
-        reply_markup=main_reply_keyboard(callback.from_user.id),
-    )
-    await callback.answer()
