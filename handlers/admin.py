@@ -244,7 +244,7 @@ async def cmd_find(message: Message):
 
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Использование: /find <telegram_id | id | имя>")
+        await message.answer("Использование: /find [telegram_id | id | имя]")
         return
 
     query = parts[1].strip()
