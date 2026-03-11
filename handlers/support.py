@@ -18,7 +18,7 @@ def support_keyboard():
 
 def support_faq_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="builder.button(text="Подключение не работает", callback_data="faq_vpn_not_connecting")", callback_data="faq_vpn_not_connecting")
+    builder.button(text="Подключение не работает", callback_data="faq_connection_not_working")
     builder.button(text="QR не импортируется", callback_data="faq_qr_import")
     builder.button(text="Ссылка не открывается", callback_data="faq_link_not_opening")
     builder.button(text="Подписка активна, но нет интернета", callback_data="faq_no_internet")
@@ -46,7 +46,7 @@ async def support_message(message: Message):
 @router.callback_query(F.data == "support_back")
 async def support_back(callback: CallbackQuery):
     await callback.message.answer(
-        "Поддержка:\n\n"
+        "Поддержка\n\n"
         f"Связь: {SUPPORT_USERNAME}\n\n"
         "Выберите действие ниже.",
         reply_markup=support_keyboard(),
@@ -64,14 +64,14 @@ async def support_faq(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "faq_vpn_not_connecting")
-async def faq_vpn_not_connecting(callback: CallbackQuery):
+@router.callback_query(F.data == "faq_connection_not_working")
+async def faq_connection_not_working(callback: CallbackQuery):
     await callback.message.answer(
-        "VPN не подключается:\n\n"
+        "Подключение не работает:\n\n"
         "1. Проверьте, что подписка активна в разделе «Мой профиль».\n"
         "2. Откройте «Моя подписка» и заново импортируйте ссылку или QR.\n"
         "3. Убедитесь, что в приложении Happ включено подключение.\n"
-        "4. Попробуйте выключить и снова включить защищенное подключение.\n"
+        "4. Попробуйте выключить и снова включить подключение.\n"
         "5. Если не помогло — напишите в поддержку и приложите скриншот.",
         reply_markup=support_faq_keyboard(),
     )
@@ -111,10 +111,10 @@ async def faq_link_not_opening(callback: CallbackQuery):
 async def faq_no_internet(callback: CallbackQuery):
     await callback.message.answer(
         "Подписка активна, но интернета нет:\n\n"
-        "1. Переподключитесь в приложении.\n"
+        "1. Переподключите защищенное соединение в приложении.\n"
         "2. Проверьте, что импортирован именно свежий конфиг из бота.\n"
         "3. Попробуйте удалить старый конфиг и импортировать заново.\n"
-        "4. Убедитесь, что на устройстве есть обычный интернет без Freeth.\n"
+        "4. Убедитесь, что на устройстве есть обычный интернет без защищенного подключения.\n"
         "5. Если проблема остается — напишите в поддержку.",
         reply_markup=support_faq_keyboard(),
     )
