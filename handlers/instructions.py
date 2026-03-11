@@ -104,16 +104,16 @@ async def instr_mac(callback: CallbackQuery):
         "3. В боте откройте «Моя подписка».\n"
         "4. Импортируйте ссылку или QR-код в Happ.\n"
         "5. Включите подключение.\n\n"
-        "Если macOS спросит разрешения на сеть/VPN, подтвердите их.",
+        "Если macOS спросит разрешения на защищенное подключение, подтвердите их.",
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
 
-    @router.callback_query(F.data == "open_instructions_from_support")
-    async def open_instructions_from_support(callback: CallbackQuery):
-        await callback.message.answer(
-            "Выберите платформу:\n\n"
-            "Я покажу, какое приложение установить и как импортировать конфиг.",
-            reply_markup=instructions_keyboard(),
-        )
-        await callback.answer()
+@router.callback_query(F.data == "open_instructions_from_support")
+async def open_instructions_from_support(callback: CallbackQuery):
+    await callback.message.answer(
+        "Выберите платформу:\n\n"
+        "Я покажу, какое приложение установить и как импортировать конфиг.",
+        reply_markup=instructions_keyboard(),
+    )
+    await callback.answer()

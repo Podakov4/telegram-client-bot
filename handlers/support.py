@@ -18,7 +18,7 @@ def support_keyboard():
 
 def support_faq_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="VPN не подключается", callback_data="faq_vpn_not_connecting")
+    builder.button(text="builder.button(text="Подключение не работает", callback_data="faq_vpn_not_connecting")", callback_data="faq_vpn_not_connecting")
     builder.button(text="QR не импортируется", callback_data="faq_qr_import")
     builder.button(text="Ссылка не открывается", callback_data="faq_link_not_opening")
     builder.button(text="Подписка активна, но нет интернета", callback_data="faq_no_internet")
@@ -71,7 +71,7 @@ async def faq_vpn_not_connecting(callback: CallbackQuery):
         "1. Проверьте, что подписка активна в разделе «Мой профиль».\n"
         "2. Откройте «Моя подписка» и заново импортируйте ссылку или QR.\n"
         "3. Убедитесь, что в приложении Happ включено подключение.\n"
-        "4. Попробуйте выключить и снова включить VPN.\n"
+        "4. Попробуйте выключить и снова включить защищенное подключение.\n"
         "5. Если не помогло — напишите в поддержку и приложите скриншот.",
         reply_markup=support_faq_keyboard(),
     )
@@ -111,10 +111,10 @@ async def faq_link_not_opening(callback: CallbackQuery):
 async def faq_no_internet(callback: CallbackQuery):
     await callback.message.answer(
         "Подписка активна, но интернета нет:\n\n"
-        "1. Переподключите VPN в приложении.\n"
+        "1. Переподключитесь в приложении.\n"
         "2. Проверьте, что импортирован именно свежий конфиг из бота.\n"
         "3. Попробуйте удалить старый конфиг и импортировать заново.\n"
-        "4. Убедитесь, что на устройстве есть обычный интернет без VPN.\n"
+        "4. Убедитесь, что на устройстве есть обычный интернет без Freeth.\n"
         "5. Если проблема остается — напишите в поддержку.",
         reply_markup=support_faq_keyboard(),
     )
