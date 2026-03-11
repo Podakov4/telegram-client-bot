@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
@@ -26,6 +26,7 @@ def admin_dashboard_keyboard():
     builder.button(text="Просрочены", callback_data="admin_dashboard_expired")
     builder.button(text="На trial", callback_data="admin_dashboard_trial")
     builder.button(text="Активные", callback_data="admin_dashboard_active")
+    builder.button(text="Статистика", callback_data="admin_dashboard_stats")
     builder.button(text="Напомнить истекающим", callback_data="admin_notify_expiring")
     builder.button(text="Напомнить просроченным", callback_data="admin_notify_expired")
     builder.button(text="Как искать клиента", callback_data="admin_dashboard_find_help")
@@ -222,6 +223,74 @@ async def send_expired_notice(bot: Bot, client: Client) -> bool:
         return True
     except Exception:
         return False
+
+async def get_admin_stats():
+    now = datetime.utcnow()
+    today_start = datetime(now.year, now.month, now.day)
+    week_start = now - timedelta(days=7)
+    month_start = now - timedelta(days=30)
+
+    async with AsyncSessionLocal() as session:
+        total_clients = await session.scalar(
+            select(func.count()).select_from(Client)
+        )
+
+        active_clients = await session.scalar(
+            select(func.count()).select_from(Client).where(Client.is_active == True)
+        )
+
+        trial_clients = await session.scalar(
+            select(func.count()).select_from(Client).where(
+                Client.is_active == True,
+                Client.is_paid == False,
+                Client.notes.is_not(None),
+            )
+        )
+
+        expiring_clients = await session.scalar(
+            select(func.count()).select_from(Client).where(
+                Client.is_active == True,
+                Client.paid_until.is_not(None),
+                Client.paid_until > now,
+                Client.paid_until <= now + timedelta(days=3),
+            )
+        )
+
+        expired_clients = await session.scalar(
+            select(func.count()).select_from(Client).where(
+                Client.paid_until.is_not(None),
+                Client.paid_until <= now,
+            )
+        )
+
+        activations_today = await session.scalar(
+            select(func.count()).select_from(SubscriptionHistory).where(
+                SubscriptionHistory.created_at >= today_start
+            )
+        )
+
+        activations_week = await session.scalar(
+            select(func.count()).select_from(SubscriptionHistory).where(
+                SubscriptionHistory.created_at >= week_start
+            )
+        )
+
+        activations_month = await session.scalar(
+            select(func.count()).select_from(SubscriptionHistory).where(
+                SubscriptionHistory.created_at >= month_start
+            )
+        )
+
+    return {
+        "total_clients": total_clients or 0,
+        "active_clients": active_clients or 0,
+        "trial_clients": trial_clients or 0,
+        "expiring_clients": expiring_clients or 0,
+        "expired_clients": expired_clients or 0,
+        "activations_today": activations_today or 0,
+        "activations_week": activations_week or 0,
+        "activations_month": activations_month or 0,
+    }
 
 
 @router.message(Command("admin"))
@@ -559,3 +628,25 @@ async def cb_admin_disable(callback: CallbackQuery):
         reply_markup=admin_client_actions_keyboard(updated.id),
     )
     await callback.answer("Готово")
+
+@router.callback_query(F.data == "admin_dashboard_stats")
+async def cb_admin_dashboard_stats(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    stats = await get_admin_stats()
+
+    await callback.message.answer(
+        "Статистика:\n\n"
+        f"Всего клиентов: {stats['total_clients']}\n"
+        f"Активных: {stats['active_clients']}\n"
+        f"На trial: {stats['trial_clients']}\n"
+        f"Истекают за 3 дня: {stats['expiring_clients']}\n"
+        f"Просрочены: {stats['expired_clients']}\n\n"
+        f"Активаций сегодня: {stats['activations_today']}\n"
+        f"Активаций за 7 дней: {stats['activations_week']}\n"
+        f"Активаций за 30 дней: {stats['activations_month']}",
+        reply_markup=admin_dashboard_keyboard(),
+    )
+    await callback.answer()
