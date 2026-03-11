@@ -475,6 +475,7 @@ async def help_message(message: Message):
             "• Продлить подписку\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
+            "• /find <telegram_id | id | имя> — найти клиента\n"
             "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
             "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
             reply_markup=main_reply_keyboard(message.from_user.id),
