@@ -5,12 +5,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
+import logging
 
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
 from database.models import Client
 
 router = Router()
+logger = logging.getLogger(__name__)
 
 
 class NewsStates(StatesGroup):
@@ -109,11 +111,12 @@ async def get_news_recipients(active_only: bool) -> list[Client]:
         return list(result.scalars().all())
 
 
-async def send_news(bot: Bot, data: dict, active_only: bool) -> tuple[int, int]:
+async def send_news(bot: Bot, data: dict, active_only: bool) -> tuple[int, int, list[str]]:
     clients = await get_news_recipients(active_only=active_only)
 
     sent = 0
     failed = 0
+    failed_ids: list[str] = []
 
     news_type = data.get("news_type")
     news_text = data.get("news_text", "")
@@ -133,10 +136,28 @@ async def send_news(bot: Bot, data: dict, active_only: bool) -> tuple[int, int]:
                     text=news_text,
                 )
             sent += 1
-        except Exception:
+        except Exception as e:
             failed += 1
+            failed_ids.append(str(client.telegram_id))
+            logger.exception(
+                "Не удалось отправить новость telegram_id=%s: %s",
+                client.telegram_id,
+                e,
+            )
 
-    return sent, failed
+    return sent, failed, failed_ids
+
+
+def build_failed_ids_text(failed_ids: list[str]) -> str:
+    if not failed_ids:
+        return ""
+
+    preview = "\n".join(failed_ids[:20])
+    extra = ""
+    if len(failed_ids) > 20:
+        extra = f"\n\nИ ещё: {len(failed_ids) - 20}"
+
+    return f"\n\nНе доставлено telegram_id:\n{preview}{extra}"
 
 
 @router.callback_query(F.data == "news_send_all", NewsStates.waiting_for_confirm)
@@ -152,13 +173,14 @@ async def news_send_all(callback: CallbackQuery, state: FSMContext, bot: Bot):
         await callback.answer()
         return
 
-    sent, failed = await send_news(bot, data=data, active_only=False)
+    sent, failed, failed_ids = await send_news(bot, data=data, active_only=False)
     await state.clear()
 
     await callback.message.answer(
         f"Готово.\n\n"
         f"Отправлено всем: {sent}\n"
         f"Ошибок: {failed}"
+        f"{build_failed_ids_text(failed_ids)}"
     )
     await callback.answer("Рассылка завершена")
 
@@ -176,13 +198,14 @@ async def news_send_active(callback: CallbackQuery, state: FSMContext, bot: Bot)
         await callback.answer()
         return
 
-    sent, failed = await send_news(bot, data=data, active_only=True)
+    sent, failed, failed_ids = await send_news(bot, data=data, active_only=True)
     await state.clear()
 
     await callback.message.answer(
         f"Готово.\n\n"
         f"Отправлено активным: {sent}\n"
         f"Ошибок: {failed}"
+        f"{build_failed_ids_text(failed_ids)}"
     )
     await callback.answer("Рассылка завершена")
 
