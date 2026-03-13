@@ -14,7 +14,7 @@ router = Router()
 
 
 class NewsStates(StatesGroup):
-    waiting_for_text = State()
+    waiting_for_content = State()
     waiting_for_confirm = State()
 
 
@@ -37,10 +37,12 @@ async def cmd_news(message: Message, state: FSMContext):
         await message.answer("Недостаточно прав.")
         return
 
-    await state.set_state(NewsStates.waiting_for_text)
+    await state.set_state(NewsStates.waiting_for_content)
     await message.answer(
-        "Отправьте текст новости одним сообщением.\n\n"
-        "Поддерживается обычный текст и HTML-разметка Telegram.\n"
+        "Отправьте новость одним сообщением.\n\n"
+        "Можно:\n"
+        "• только текст\n"
+        "• фото с подписью\n\n"
         "Для отмены введите /cancel_news"
     )
 
@@ -51,7 +53,30 @@ async def cancel_news_command(message: Message, state: FSMContext):
     await message.answer("Создание новости отменено.")
 
 
-@router.message(NewsStates.waiting_for_text)
+@router.message(NewsStates.waiting_for_content, F.photo)
+async def news_photo_received(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.")
+        return
+
+    photo = message.photo[-1]
+    caption = (message.html_text or "").strip()
+
+    await state.update_data(
+        news_type="photo",
+        news_file_id=photo.file_id,
+        news_text=caption,
+    )
+    await state.set_state(NewsStates.waiting_for_confirm)
+
+    await message.answer_photo(
+        photo.file_id,
+        caption=caption or "Предпросмотр новости без подписи",
+        reply_markup=news_preview_keyboard(),
+    )
+
+
+@router.message(NewsStates.waiting_for_content)
 async def news_text_received(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await message.answer("Недостаточно прав.")
@@ -59,10 +84,13 @@ async def news_text_received(message: Message, state: FSMContext):
 
     text = (message.html_text or "").strip()
     if not text:
-        await message.answer("Нужен текст новости.")
+        await message.answer("Нужен текст новости или фото с подписью.")
         return
 
-    await state.update_data(news_text=text)
+    await state.update_data(
+        news_type="text",
+        news_text=text,
+    )
     await state.set_state(NewsStates.waiting_for_confirm)
 
     await message.answer(
@@ -81,18 +109,29 @@ async def get_news_recipients(active_only: bool) -> list[Client]:
         return list(result.scalars().all())
 
 
-async def send_news(bot: Bot, text: str, active_only: bool) -> tuple[int, int]:
+async def send_news(bot: Bot, data: dict, active_only: bool) -> tuple[int, int]:
     clients = await get_news_recipients(active_only=active_only)
 
     sent = 0
     failed = 0
 
+    news_type = data.get("news_type")
+    news_text = data.get("news_text", "")
+    news_file_id = data.get("news_file_id")
+
     for client in clients:
         try:
-            await bot.send_message(
-                chat_id=int(client.telegram_id),
-                text=text,
-            )
+            if news_type == "photo" and news_file_id:
+                await bot.send_photo(
+                    chat_id=int(client.telegram_id),
+                    photo=news_file_id,
+                    caption=news_text or None,
+                )
+            else:
+                await bot.send_message(
+                    chat_id=int(client.telegram_id),
+                    text=news_text,
+                )
             sent += 1
         except Exception:
             failed += 1
@@ -107,15 +146,13 @@ async def news_send_all(callback: CallbackQuery, state: FSMContext, bot: Bot):
         return
 
     data = await state.get_data()
-    text = data.get("news_text", "").strip()
-
-    if not text:
-        await callback.message.answer("Текст новости не найден. Начните заново: /news")
+    if not data:
+        await callback.message.answer("Новость не найдена. Начните заново: /news")
         await state.clear()
         await callback.answer()
         return
 
-    sent, failed = await send_news(bot, text=text, active_only=False)
+    sent, failed = await send_news(bot, data=data, active_only=False)
     await state.clear()
 
     await callback.message.answer(
@@ -133,15 +170,13 @@ async def news_send_active(callback: CallbackQuery, state: FSMContext, bot: Bot)
         return
 
     data = await state.get_data()
-    text = data.get("news_text", "").strip()
-
-    if not text:
-        await callback.message.answer("Текст новости не найден. Начните заново: /news")
+    if not data:
+        await callback.message.answer("Новость не найдена. Начните заново: /news")
         await state.clear()
         await callback.answer()
         return
 
-    sent, failed = await send_news(bot, text=text, active_only=True)
+    sent, failed = await send_news(bot, data=data, active_only=True)
     await state.clear()
 
     await callback.message.answer(
