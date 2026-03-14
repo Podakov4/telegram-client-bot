@@ -143,7 +143,7 @@ def get_amount_by_months(months: int) -> str:
 
 async def create_checkout_payment(telegram_id: str, full_name: str | None, months: int):
     amount = get_amount_by_months(months)
-    description = f"Freeth VPN: {months} мес. для {full_name or telegram_id}"
+    description = f"Freeth: {months} мес. для {full_name or telegram_id}"
 
     payment = await yk_create_payment(
         amount=amount,
