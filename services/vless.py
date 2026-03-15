@@ -41,6 +41,9 @@ class VLESSManager:
         prefix = f"/{XUI_WEB_BASE_PATH}" if XUI_WEB_BASE_PATH else ""
         return f"{base}{prefix}{path}"
 
+    def _api_url(self, path: str) -> str:
+        return self._join_url(f"/panel/api/inbounds/{path}")
+
     def login(self) -> bool:
         try:
             login_url = self._join_url("/login")
@@ -55,7 +58,7 @@ class VLESSManager:
             )
 
             logger.info("3x-ui login url=%s", login_url)
-            logger.info("3x-ui login status=%s body=%s", response.status_code, response.text)
+            logger.info("3x-ui login status=%s", response.status_code)
 
             if response.status_code != 200:
                 logger.error("3x-ui login failed: HTTP %s", response.status_code)
@@ -71,14 +74,11 @@ class VLESSManager:
             logger.exception("Ошибка логина в 3x-ui: %s", e)
             return False
 
-    def _api_url(self, path: str) -> str:
-        return self._join_url(f"/panel/api/inbounds/{path}")
-
     def find_inbound_by_port(self, port: int) -> Optional[int]:
         try:
             response = self.session.get(self._api_url("list"), timeout=15)
 
-            logger.info("inbounds list status=%s body=%s", response.status_code, response.text)
+            logger.info("inbounds list status=%s", response.status_code)
 
             if response.status_code != 200:
                 logger.error("Не удалось получить список inbound: HTTP %s", response.status_code)
@@ -99,6 +99,86 @@ class VLESSManager:
         except Exception as e:
             logger.exception("Ошибка поиска inbound: %s", e)
             return None
+
+    def get_inbound(self, inbound_id: int) -> Optional[dict]:
+        try:
+            response = self.session.get(self._api_url(f"get/{inbound_id}"), timeout=15)
+            logger.info("get inbound status=%s", response.status_code)
+
+            if response.status_code != 200:
+                logger.error("Не удалось получить inbound: HTTP %s", response.status_code)
+                return None
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка получения inbound: %s", data.get("msg"))
+                return None
+
+            return data.get("obj")
+        except Exception as e:
+            logger.exception("Ошибка получения inbound: %s", e)
+            return None
+
+    def _load_clients_from_inbound(self, inbound: dict) -> list[dict]:
+        settings_raw = inbound.get("settings") or "{}"
+        if isinstance(settings_raw, str):
+            settings = json.loads(settings_raw)
+        else:
+            settings = settings_raw
+        return settings.get("clients", [])
+
+    def _save_clients_to_inbound(self, inbound_id: int, clients: list[dict]) -> bool:
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps({"clients": clients}, ensure_ascii=False),
+        }
+
+        try:
+            update_url = self._api_url(f"update/{inbound_id}")
+            response = self.session.post(update_url, json=payload, timeout=20)
+
+            logger.info("update inbound status=%s", response.status_code)
+
+            if response.status_code != 200:
+                logger.error("Ошибка update inbound: HTTP %s", response.status_code)
+                return False
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка update inbound: %s", data.get("msg"))
+                return False
+
+            return True
+        except Exception as e:
+            logger.exception("Ошибка сохранения inbound: %s", e)
+            return False
+
+    def find_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> tuple[int, dict, list[dict]] | None:
+        if not self.login():
+            return None
+
+        inbound_id = self.find_inbound_by_port(XRAY_INBOUND_PORT)
+        if not inbound_id:
+            return None
+
+        inbound = self.get_inbound(inbound_id)
+        if not inbound:
+            return None
+
+        clients = self._load_clients_from_inbound(inbound)
+
+        for client in clients:
+            if email and client.get("email") == email:
+                return inbound_id, client, clients
+            if client_uuid and client.get("id") == client_uuid:
+                return inbound_id, client, clients
+
+        return None
 
     def build_vless_link(self, client_uuid: str, remark: str) -> str:
         path = VLESS_PATH if VLESS_PATH.startswith("/") else f"/{VLESS_PATH}"
@@ -130,6 +210,13 @@ class VLESSManager:
         if not inbound_id:
             return None
 
+        existing = self.find_client(email=xui_email)
+        if existing:
+            inbound_id_existing, client_obj, _ = existing
+            logger.info("Client already exists in 3x-ui email=%s", xui_email)
+            link = self.build_vless_link(client_obj["id"], full_name or xui_email)
+            return client_obj["id"], xui_email, link
+
         client_uuid = str(uuid.uuid4())
 
         settings = {
@@ -156,17 +243,9 @@ class VLESSManager:
 
         try:
             add_url = self._api_url("addClient")
+            response = self.session.post(add_url, json=payload, timeout=20)
 
-            logger.info("addClient url=%s", add_url)
-            logger.info("addClient payload=%s", payload)
-
-            response = self.session.post(
-                add_url,
-                json=payload,
-                timeout=20,
-            )
-
-            logger.info("addClient status=%s body=%s", response.status_code, response.text)
+            logger.info("addClient status=%s", response.status_code)
 
             if response.status_code != 200:
                 logger.error("Ошибка addClient: HTTP %s", response.status_code)
@@ -183,3 +262,63 @@ class VLESSManager:
         except Exception as e:
             logger.exception("Ошибка создания клиента в 3x-ui: %s", e)
             return None
+
+    def update_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+        enable: bool | None = None,
+        expiry_time_ms: int | None = None,
+        total_gb: int | None = None,
+    ) -> bool:
+        found = self.find_client(email=email, client_uuid=client_uuid)
+        if not found:
+            logger.error("Клиент в 3x-ui не найден email=%s uuid=%s", email, client_uuid)
+            return False
+
+        inbound_id, client_obj, clients = found
+
+        for item in clients:
+            is_match = False
+            if email and item.get("email") == email:
+                is_match = True
+            if client_uuid and item.get("id") == client_uuid:
+                is_match = True
+
+            if is_match:
+                if enable is not None:
+                    item["enable"] = enable
+                if expiry_time_ms is not None:
+                    item["expiryTime"] = expiry_time_ms
+                if total_gb is not None:
+                    item["totalGB"] = total_gb * 1024 * 1024 * 1024
+                break
+
+        return self._save_clients_to_inbound(inbound_id, clients)
+
+    def disable_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> bool:
+        return self.update_client(
+            email=email,
+            client_uuid=client_uuid,
+            enable=False,
+        )
+
+    def enable_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+        expiry_time_ms: int | None = None,
+    ) -> bool:
+        return self.update_client(
+            email=email,
+            client_uuid=client_uuid,
+            enable=True,
+            expiry_time_ms=expiry_time_ms,
+        )

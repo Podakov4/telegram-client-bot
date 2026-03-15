@@ -41,45 +41,34 @@ async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
 
 
 async def create_vpn_access_for_client(telegram_id: str) -> bool:
-    logger.info("create_vpn_access_for_client start telegram_id=%s", telegram_id)
-
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.telegram_id == telegram_id)
         )
         client = result.scalar_one_or_none()
 
-        if client is None:
-            logger.warning("Client not found for telegram_id=%s", telegram_id)
+        if client is None or not client.paid_until:
             return False
 
-        logger.info(
-            "Client found id=%s login=%s xui_uuid=%s",
-            client.id,
-            client.login,
-            client.xui_uuid,
-        )
+        manager = VLESSManager()
+        paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
 
-        if client.xui_uuid and client.subscription_link:
-            logger.info("Client already has access telegram_id=%s", telegram_id)
-            return True
-
-        if not client.paid_until:
-            logger.warning(
-                "Refusing to create access without paid_until telegram_id=%s",
-                telegram_id,
+        if client.xui_uuid and client.xui_email:
+            ok = manager.enable_client(
+                client_uuid=client.xui_uuid,
+                email=client.xui_email,
+                expiry_time_ms=paid_until_ts_ms,
             )
-            return False
+            if ok:
+                client.updated_at = datetime.utcnow()
+                await session.commit()
+            return ok
 
         xui_email = client.login or make_xui_email(
             telegram_id=client.telegram_id,
             full_name=client.full_name,
             fallback_id=client.id,
         )
-        logger.info("Using xui_email=%s for telegram_id=%s", xui_email, telegram_id)
-
-        manager = VLESSManager()
-        paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
 
         created = manager.add_client(
             telegram_id=client.telegram_id,
@@ -89,14 +78,10 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
             total_gb=0,
         )
 
-        logger.info("create_vpn_access_for_client result=%s", created)
-
         if not created:
-            logger.error("Failed to create client access for telegram_id=%s", telegram_id)
             return False
 
         xui_uuid, xui_email, subscription_link = created
-
         client.login = xui_email
         client.xui_email = xui_email
         client.xui_uuid = xui_uuid
@@ -105,3 +90,49 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
 
         await session.commit()
         return True
+
+
+async def sync_vpn_expiry_for_client(telegram_id: str) -> bool:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
+        )
+        client = result.scalar_one_or_none()
+
+        if client is None or not client.paid_until or not (client.xui_uuid or client.xui_email):
+            return False
+
+        manager = VLESSManager()
+        paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
+
+        return manager.enable_client(
+            client_uuid=client.xui_uuid,
+            email=client.xui_email,
+            expiry_time_ms=paid_until_ts_ms,
+        )
+
+
+async def disable_vpn_access_for_client(telegram_id: str) -> bool:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == telegram_id)
+        )
+        client = result.scalar_one_or_none()
+
+        if client is None:
+            return False
+
+        if not client.xui_uuid and not client.xui_email:
+            return True
+
+        manager = VLESSManager()
+        ok = manager.disable_client(
+            client_uuid=client.xui_uuid,
+            email=client.xui_email,
+        )
+
+        if ok:
+            client.updated_at = datetime.utcnow()
+            await session.commit()
+
+        return ok

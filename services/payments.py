@@ -27,6 +27,24 @@ def add_months_as_days(months: int) -> int:
     return months * 30
 
 
+def get_amount_by_months(months: int) -> str:
+    if months == 1:
+        return YOOKASSA_AMOUNT_1_MONTH
+    if months == 3:
+        return YOOKASSA_AMOUNT_3_MONTHS
+    if months == 12:
+        return YOOKASSA_AMOUNT_12_MONTHS
+    raise ValueError(f"Unsupported months value: {months}")
+
+
+def build_payment_description(months: int) -> str:
+    return f"Freeth — подписка на цифровой сервис, {months} мес."
+
+
+def build_receipt_item_name(months: int) -> str:
+    return f"Подписка на цифровой сервис Freeth — {months} мес."
+
+
 async def activate_subscription(telegram_id: str, months: int) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -115,7 +133,7 @@ async def activate_trial_subscription(
 
     ok = await create_vpn_access_for_client(telegram_id)
     if not ok:
-        return False, "Пробный период создан, но не удалось выдать VPN-доступ."
+        return False, "Пробный период создан, но доступ не удалось подготовить."
 
     return True, "Пробный период активирован."
 
@@ -139,23 +157,15 @@ async def deactivate_subscription(telegram_id: str) -> bool:
     return True
 
 
-def get_amount_by_months(months: int) -> str:
-    if months == 1:
-        return YOOKASSA_AMOUNT_1_MONTH
-    if months == 3:
-        return YOOKASSA_AMOUNT_3_MONTHS
-    if months == 12:
-        return YOOKASSA_AMOUNT_12_MONTHS
-    raise ValueError(f"Unsupported months value: {months}")
-
-
 async def create_checkout_payment(telegram_id: str, full_name: str | None, months: int):
     amount = get_amount_by_months(months)
-    description = f"Freeth: {months} мес. для {full_name or telegram_id}"
+    description = build_payment_description(months)
+    item_name = build_receipt_item_name(months)
 
     payment = await yk_create_payment(
         amount=amount,
         description=description,
+        item_name=item_name,
         telegram_id=telegram_id,
         months=months,
     )
