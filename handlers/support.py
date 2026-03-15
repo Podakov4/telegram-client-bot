@@ -10,35 +10,26 @@ router = Router()
 def support_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Написать в поддержку", url=SUPPORT_URL)
-    builder.button(text="Частые проблемы", callback_data="support_faq")
-    builder.button(text="Открыть инструкции", callback_data="open_instructions_from_support")
+    builder.button(text="Показать инструкции", callback_data="open_instructions_from_support")
+    builder.button(text="Частые вопросы", callback_data="support_faq")
     builder.adjust(1)
     return builder.as_markup()
 
 
-def support_faq_keyboard():
+def support_back_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="Подключение не работает", callback_data="faq_connection_not_working")
-    builder.button(text="QR не импортируется", callback_data="faq_qr_import")
-    builder.button(text="Ссылка не открывается", callback_data="faq_link_not_opening")
-    builder.button(text="Подписка активна, но нет интернета", callback_data="faq_no_internet")
-    builder.button(text="Как продлить подписку", callback_data="faq_how_renew")
-    builder.button(text="Назад в поддержку", callback_data="support_back")
+    builder.button(text="Написать в поддержку", url=SUPPORT_URL)
+    builder.button(text="Назад", callback_data="support_back")
     builder.adjust(1)
     return builder.as_markup()
 
 
 @router.message(F.text == "Поддержка")
-async def support_message(message: Message):
+async def support_menu(message: Message):
     await message.answer(
-        "Поддержка\n\n"
-        f"Связь: {SUPPORT_USERNAME}\n\n"
-        "Если возникла проблема, сразу приложите:\n"
-        "• ваш Telegram ID или имя в боте\n"
-        "• описание проблемы\n"
-        "• скриншот ошибки, если он есть\n"
-        "• устройство: iPhone / Android / Windows / Mac\n\n"
-        "Также можно открыть инструкции или частые вопросы ниже.",
+        "Поддержка Freeth\n\n"
+        "Если у вас возникли вопросы по оплате, подписке или подключению, "
+        "напишите в поддержку или откройте раздел с частыми вопросами.",
         reply_markup=support_keyboard(),
     )
 
@@ -46,9 +37,9 @@ async def support_message(message: Message):
 @router.callback_query(F.data == "support_back")
 async def support_back(callback: CallbackQuery):
     await callback.message.answer(
-        "Поддержка\n\n"
-        f"Связь: {SUPPORT_USERNAME}\n\n"
-        "Выберите действие ниже.",
+        "Поддержка Freeth\n\n"
+        "Если у вас возникли вопросы по оплате, подписке или подключению, "
+        "напишите в поддержку или откройте раздел с частыми вопросами.",
         reply_markup=support_keyboard(),
     )
     await callback.answer()
@@ -57,78 +48,20 @@ async def support_back(callback: CallbackQuery):
 @router.callback_query(F.data == "support_faq")
 async def support_faq(callback: CallbackQuery):
     await callback.message.answer(
-        "Частые проблемы:\n\n"
-        "Выберите подходящий вариант ниже.",
-        reply_markup=support_faq_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "faq_connection_not_working")
-async def faq_connection_not_working(callback: CallbackQuery):
-    await callback.message.answer(
-        "Подключение не работает:\n\n"
-        "1. Проверьте, что подписка активна в разделе «Мой профиль».\n"
-        "2. Откройте «Моя подписка» и заново импортируйте ссылку или QR.\n"
-        "3. Убедитесь, что в приложении Happ включено подключение.\n"
-        "4. Попробуйте выключить и снова включить подключение.\n"
-        "5. Если не помогло — напишите в поддержку и приложите скриншот.",
-        reply_markup=support_faq_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "faq_qr_import")
-async def faq_qr_import(callback: CallbackQuery):
-    await callback.message.answer(
-        "QR не импортируется:\n\n"
-        "1. Откройте «Моя подписка» и нажмите «Показать QR» еще раз.\n"
-        "2. Убедитесь, что QR целиком виден на экране.\n"
-        "3. Попробуйте вместо QR использовать кнопку «Показать ссылку».\n"
-        "4. Если импорт все равно не работает — напишите в поддержку.",
-        reply_markup=support_faq_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "faq_link_not_opening")
-async def faq_link_not_opening(callback: CallbackQuery):
-    await callback.message.answer(
-        "Ссылка не открывается:\n\n"
-        "Это нормально: Telegram не умеет открывать vless:// напрямую кнопкой.\n\n"
-        "Что делать:\n"
-        "1. Откройте «Моя подписка».\n"
-        "2. Нажмите «Показать ссылку».\n"
-        "3. Скопируйте ссылку вручную.\n"
-        "4. Импортируйте ее в Happ.\n\n"
-        "Либо используйте QR-код — это обычно удобнее.",
-        reply_markup=support_faq_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "faq_no_internet")
-async def faq_no_internet(callback: CallbackQuery):
-    await callback.message.answer(
-        "Подписка активна, но интернета нет:\n\n"
-        "1. Переподключите защищенное соединение в приложении.\n"
-        "2. Проверьте, что импортирован именно свежий конфиг из бота.\n"
-        "3. Попробуйте удалить старый конфиг и импортировать заново.\n"
-        "4. Убедитесь, что на устройстве есть обычный интернет без защищенного подключения.\n"
-        "5. Если проблема остается — напишите в поддержку.",
-        reply_markup=support_faq_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data == "faq_how_renew")
-async def faq_how_renew(callback: CallbackQuery):
-    await callback.message.answer(
-        "Как продлить подписку:\n\n"
-        "1. Откройте «Моя подписка».\n"
-        "2. Нажмите «Продлить подписку».\n"
-        "3. Выберите тариф: 1, 3 или 12 месяцев.\n\n"
-        "Также можно продлить через кнопку «Оплата» в главном меню.",
-        reply_markup=support_faq_keyboard(),
+        "Частые вопросы\n\n"
+        "1. Как получить доступ?\n"
+        "Откройте раздел «Оплата» или активируйте пробный период на 7 дней.\n\n"
+        "2. Где взять данные для подключения?\n"
+        "Откройте «Моя подписка», затем выберите:\n"
+        "• Показать данные для подключения\n"
+        "• Показать QR-код\n\n"
+        "3. Что делать, если не получается подключиться?\n"
+        "Проверьте инструкцию для вашего устройства в разделе «Инструкции».\n"
+        "Если проблема сохраняется, напишите в поддержку.\n\n"
+        "4. Что делать, если оплатил, но доступ не появился?\n"
+        "Нажмите «Проверить оплату» ещё раз. "
+        "Если доступ не активировался, обратитесь в поддержку.\n\n"
+        f"Поддержка: {SUPPORT_USERNAME}",
+        reply_markup=support_back_keyboard(),
     )
     await callback.answer()
