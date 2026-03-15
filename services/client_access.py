@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import logging
 import re
 
@@ -64,6 +64,13 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
             logger.info("Client already has access telegram_id=%s", telegram_id)
             return True
 
+        if not client.paid_until:
+            logger.warning(
+                "Refusing to create access without paid_until telegram_id=%s",
+                telegram_id,
+            )
+            return False
+
         xui_email = client.login or make_xui_email(
             telegram_id=client.telegram_id,
             full_name=client.full_name,
@@ -72,9 +79,7 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
         logger.info("Using xui_email=%s for telegram_id=%s", xui_email, telegram_id)
 
         manager = VLESSManager()
-
-        paid_until = datetime.utcnow() + timedelta(days=30)
-        paid_until_ts_ms = int(paid_until.timestamp() * 1000)
+        paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
 
         created = manager.add_client(
             telegram_id=client.telegram_id,
@@ -96,9 +101,6 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
         client.xui_email = xui_email
         client.xui_uuid = xui_uuid
         client.subscription_link = subscription_link
-        client.is_active = True
-        client.is_paid = True
-        client.paid_until = paid_until
         client.updated_at = datetime.utcnow()
 
         await session.commit()

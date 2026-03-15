@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from database.db import AsyncSessionLocal
-from database.models import Client, SubscriptionHistory
+from database.models import Client, SubscriptionHistory, YooKassaPayment
 from services.client_access import create_vpn_access_for_client
 
 from config import (
@@ -11,8 +11,10 @@ from config import (
     YOOKASSA_AMOUNT_3_MONTHS,
     YOOKASSA_AMOUNT_12_MONTHS,
 )
-from database.models import YooKassaPayment
-from services.yookassa import create_payment as yk_create_payment, get_payment as yk_get_payment
+from services.yookassa import (
+    create_payment as yk_create_payment,
+    get_payment as yk_get_payment,
+)
 
 
 def add_months_as_days(months: int) -> int:
@@ -40,11 +42,12 @@ async def activate_subscription(telegram_id: str, months: int) -> bool:
 
         if client.paid_until and client.paid_until > now:
             starts_at = client.paid_until
-            client.paid_until = client.paid_until + timedelta(days=days)
+            ends_at = client.paid_until + timedelta(days=days)
         else:
             starts_at = now
-            client.paid_until = now + timedelta(days=days)
+            ends_at = now + timedelta(days=days)
 
+        client.paid_until = ends_at
         client.is_paid = True
         client.is_active = True
         client.updated_at = now
@@ -56,18 +59,20 @@ async def activate_subscription(telegram_id: str, months: int) -> bool:
             plan_code=f"{months}m",
             is_trial=False,
             starts_at=starts_at,
-            ends_at=client.paid_until,
-            notes="manual or fake payment activation",
+            ends_at=ends_at,
+            notes="payment activation",
         )
         session.add(history)
-
         await session.commit()
 
-    await create_vpn_access_for_client(telegram_id)
-    return True
+    ok = await create_vpn_access_for_client(telegram_id)
+    return ok
 
 
-async def activate_trial_subscription(telegram_id: str, days: int = 7) -> tuple[bool, str]:
+async def activate_trial_subscription(
+    telegram_id: str,
+    days: int = 7,
+) -> tuple[bool, str]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.telegram_id == telegram_id)
@@ -106,10 +111,12 @@ async def activate_trial_subscription(telegram_id: str, days: int = 7) -> tuple[
             notes="trial activation",
         )
         session.add(history)
-
         await session.commit()
 
-    await create_vpn_access_for_client(telegram_id)
+    ok = await create_vpn_access_for_client(telegram_id)
+    if not ok:
+        return False, "Пробный период создан, но не удалось выдать VPN-доступ."
+
     return True, "Пробный период активирован."
 
 
@@ -130,6 +137,7 @@ async def deactivate_subscription(telegram_id: str) -> bool:
         await session.commit()
 
     return True
+
 
 def get_amount_by_months(months: int) -> str:
     if months == 1:
