@@ -16,7 +16,13 @@ YOOKASSA_API_URL = "https://api.yookassa.ru/v3/payments"
 # Необязательные переменные окружения для чека
 YOOKASSA_RECEIPT_EMAIL = os.getenv("YOOKASSA_RECEIPT_EMAIL", "").strip()
 YOOKASSA_TAX_SYSTEM_CODE = os.getenv("YOOKASSA_TAX_SYSTEM_CODE", "").strip()
-YOOKASSA_VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))
+
+raw_vat_code = os.getenv("YOOKASSA_VAT_CODE", "1").strip()
+try:
+    YOOKASSA_VAT_CODE = int(raw_vat_code)
+except ValueError:
+    YOOKASSA_VAT_CODE = 1
+
 YOOKASSA_PAYMENT_SUBJECT = os.getenv("YOOKASSA_PAYMENT_SUBJECT", "service").strip()
 YOOKASSA_PAYMENT_MODE = os.getenv("YOOKASSA_PAYMENT_MODE", "full_payment").strip()
 

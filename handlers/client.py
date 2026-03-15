@@ -28,45 +28,48 @@ router = Router()
 
 
 def format_profile_text(client: Client) -> str:
-    active_text = "Да" if client.is_active else "Нет"
-    paid_text = "Да" if client.is_paid else "Нет"
+    status_text = "активна" if client.is_active else "не активна"
+    paid_text = "да" if client.is_paid else "нет"
 
     if client.paid_until:
         paid_until_text = client.paid_until.strftime("%Y-%m-%d %H:%M")
         days_left = (client.paid_until - datetime.utcnow()).days
-        days_left_text = "Истекла" if days_left < 0 else f"{days_left} дн."
+        days_left_text = "истекла" if days_left < 0 else f"{days_left} дн."
     else:
-        paid_until_text = "Не указано"
-        days_left_text = "Не указано"
+        paid_until_text = "не указано"
+        days_left_text = "не указано"
 
-    trial_used = "Да" if client.notes and "trial_used=true" in client.notes else "Нет"
+    trial_used = "да" if client.notes and "trial_used=true" in client.notes else "нет"
 
     return (
-        f"Ваш профиль:\n\n"
-        f"ID: {client.id}\n"
-        f"Telegram ID: {client.telegram_id}\n"
-        f"Имя: {client.full_name or 'Не указано'}\n"
-        f"Логин: {client.login or 'Не указан'}\n"
-        f"UUID: {client.xui_uuid or 'Не назначен'}\n"
-        f"Активен: {active_text}\n"
+        f"<b>Ваш профиль</b>\n\n"
+        f"Статус подписки: {status_text}\n"
         f"Оплачено: {paid_text}\n"
-        f"Пробный использован: {trial_used}\n"
+        f"Пробный период использован: {trial_used}\n"
         f"Активно до: {paid_until_text}\n"
-        f"Осталось: {days_left_text}\n"
+        f"Осталось: {days_left_text}\n\n"
+        f"Имя: {client.full_name or 'не указано'}\n"
+        f"Telegram ID: <code>{client.telegram_id}</code>"
     )
-
 
 def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
-        return "У вас пока нет ссылки подписки.\nСначала активируйте пробный период или оплатите подписку."
+        return (
+            "<b>Подписка</b>\n\n"
+            "У вас пока нет активного доступа.\n"
+            "Вы можете оформить подписку или сначала активировать пробный период."
+        )
 
-    return "Подписка готова.\n\nВыберите действие ниже."
-
+    return (
+        "<b>Подписка</b>\n\n"
+        "Доступ подготовлен.\n"
+        "Выберите действие ниже."
+    )
 
 def subscription_actions_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="Показать ссылку", callback_data="show_vless_link")
-    builder.button(text="Показать QR", callback_data="show_vless_qr")
+    builder.button(text="Показать данные для подключения", callback_data="show_vless_link")
+    builder.button(text="Показать QR-код", callback_data="show_vless_qr")
     builder.button(text="Продлить подписку", callback_data="open_payment_menu")
     builder.adjust(1)
     return builder.as_markup()
@@ -120,10 +123,11 @@ async def start_checkout(callback: CallbackQuery, months: int):
         return
 
     await callback.message.answer(
-        "Платеж создан.\n\n"
-        "Чтобы активировать подписку:\n"
+        "Вы оформляете подписку <b>Freeth</b> "
+        f"на <b>{months} мес.</b>\n\n"
+        "Для продолжения:\n"
         "1. Нажмите «Перейти к оплате»\n"
-        "2. Завершите оплату на стороне ЮKassa\n"
+        "2. Завершите оплату\n"
         "3. Вернитесь в бот\n"
         "4. Нажмите «Проверить оплату»\n\n"
         "После подтверждения подписка активируется автоматически.",
@@ -138,7 +142,7 @@ async def cmd_profile(message: Message):
     client = await get_client_by_telegram_id(str(message.from_user.id))
 
     if client is None:
-        await message.answer("Профиль не найден. Нажмите /start")
+        await message.answer("Профиль пока не найден. Нажмите /start")
         return
 
     await message.answer(
@@ -153,7 +157,7 @@ async def cmd_subscription(message: Message):
     client = await get_client_by_telegram_id(str(message.from_user.id))
 
     if client is None:
-        await message.answer("Профиль не найден. Нажмите /start")
+        await message.answer("Профиль пока не найден. Нажмите /start")
         return
 
     if not client.subscription_link:
@@ -174,12 +178,12 @@ async def cb_show_vless_link(callback: CallbackQuery):
     client = await get_client_by_telegram_id(str(callback.from_user.id))
 
     if client is None or not client.subscription_link:
-        await callback.message.answer("Ссылка подписки не найдена.")
+        await callback.message.answer("Данные для подключения не найдены.")
         await callback.answer()
         return
 
     await callback.message.answer(
-        "Ссылка для копирования:\n\n"
+        "Данные для подключения:\n\n"
         f"<code>{client.subscription_link}</code>",
         parse_mode="HTML",
         reply_markup=main_reply_keyboard(callback.from_user.id),
@@ -192,7 +196,7 @@ async def cb_show_vless_qr(callback: CallbackQuery):
     client = await get_client_by_telegram_id(str(callback.from_user.id))
 
     if client is None or not client.subscription_link:
-        await callback.message.answer("Ссылка подписки не найдена.")
+        await callback.message.answer("Данные для подключения не найдены.")
         await callback.answer()
         return
 
@@ -207,12 +211,12 @@ async def cb_show_vless_qr(callback: CallbackQuery):
 
     photo = BufferedInputFile(
         buffer.getvalue(),
-        filename="vless_qr.png",
+        filename="access_qr.png",
     )
 
     await callback.message.answer_photo(
         photo,
-        caption="QR-код вашей подписки.",
+        caption="QR-код для подключения.",
         reply_markup=main_reply_keyboard(callback.from_user.id),
     )
     await callback.answer()
@@ -221,18 +225,17 @@ async def cb_show_vless_qr(callback: CallbackQuery):
 @router.callback_query(F.data == "open_payment_menu")
 async def cb_open_payment_menu(callback: CallbackQuery):
     await callback.message.answer(
-        "Freeth\n\n"
-        "Сервис защищенного сетевого подключения для личного использования.\n"
-        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности "
-        "соединения и безопасной работы в интернете.\n\n"
+        "<b>Freeth</b>\n\n"
+        "Цифровой сервис с доступом по подписке.\n\n"
         "Тарифы:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
         f"• 3 месяца — {PRICE_3_MONTHS}\n"
         f"• 12 месяцев — {PRICE_12_MONTHS}\n\n"
-        "Также доступен пробный период 7 дней.\n\n"
+        "Также доступен пробный период на 7 дней.\n\n"
         "Выберите подходящий тариф ниже.",
         reply_markup=payment_keyboard(),
     )
+    await callback.answer()
 
 
 @router.message(F.text == "Пробный период 7 дней")
@@ -255,7 +258,7 @@ async def trial_period(message: Message):
 
     if client and client.subscription_link:
         await message.answer(
-            "Ссылка готова:",
+            "Доступ подготовлен.",
             reply_markup=subscription_actions_keyboard(),
         )
 
@@ -263,15 +266,13 @@ async def trial_period(message: Message):
 @router.message(F.text == "Оплата")
 async def payment_menu(message: Message):
     await message.answer(
-        "Freeth\n\n"
-        "Сервис защищенного сетевого подключения для личного использования.\n"
-        "Подходит для защиты трафика в публичных Wi-Fi сетях, повышения приватности "
-        "соединения и безопасной работы в интернете.\n\n"
+        "<b>Freeth</b>\n\n"
+        "Цифровой сервис с доступом по подписке.\n\n"
         "Тарифы:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
         f"• 3 месяца — {PRICE_3_MONTHS}\n"
         f"• 12 месяцев — {PRICE_12_MONTHS}\n\n"
-        "Также доступен пробный период 7 дней.\n\n"
+        "Также доступен пробный период на 7 дней.\n\n"
         "Выберите подходящий тариф ниже.",
         reply_markup=payment_keyboard(),
     )
@@ -373,8 +374,8 @@ async def help_message(message: Message):
             "• Документы\n"
             "• Поддержка\n\n"
             "В подписке доступны:\n"
-            "• Показать ссылку\n"
-            "• Показать QR\n"
+            "• Показать данные для подключения\n"
+            "• Показать QR-код\n"
             "• Продлить подписку\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
@@ -396,8 +397,8 @@ async def help_message(message: Message):
             "• Документы\n"
             "• Поддержка\n\n"
             "В подписке доступны:\n"
-            "• Показать ссылку\n"
-            "• Показать QR\n"
-            "• Продлить подписку",
+            "• Показать данные для подключения\n"
+            "• Показать QR-код\n"
+            "• Продлить подписку\n\n",
             reply_markup=main_reply_keyboard(message.from_user.id),
         )

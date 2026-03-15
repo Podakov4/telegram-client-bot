@@ -11,6 +11,7 @@ router = Router()
 @router.message(F.text == "Меню")
 async def show_menu(message: Message):
     await message.answer(
-        "Главное меню:",
+        "Главное меню Freeth.\n\n"
+        "Выберите нужный раздел ниже.",
         reply_markup=main_reply_keyboard(message.from_user.id),
     )

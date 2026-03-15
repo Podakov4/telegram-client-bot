@@ -2,7 +2,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-
 router = Router()
 
 HAPP_SITE_URL = "https://www.happ.su/main/ru"
@@ -26,7 +25,7 @@ def instructions_keyboard():
 async def instructions_menu(message: Message):
     await message.answer(
         "Выберите платформу:\n\n"
-        "Я покажу, какое приложение установить и как импортировать конфиг.",
+        "Я покажу, какое приложение установить и как импортировать данные для подключения.",
         reply_markup=instructions_keyboard(),
     )
 
@@ -42,9 +41,9 @@ async def instr_ios(callback: CallbackQuery):
         "iPhone / iPad:\n\n"
         "1. Установите Happ из App Store.\n"
         "2. Откройте бота и зайдите в «Моя подписка».\n"
-        "3. Нажмите «Показать QR» или «Показать ссылку».\n"
-        "4. Импортируйте конфиг в Happ.\n"
-        "5. Подключите защищенное соединение внутри приложения.",
+        "3. Нажмите «Показать данные для подключения» или «Показать QR-код».\n"
+        "4. Импортируйте данные в Happ.\n"
+        "5. Активируйте подключение внутри приложения.",
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
@@ -61,8 +60,8 @@ async def instr_android(callback: CallbackQuery):
         "Android:\n\n"
         "1. Установите Happ из Google Play.\n"
         "2. Откройте бота и зайдите в «Моя подписка».\n"
-        "3. Нажмите «Показать QR» или «Показать ссылку».\n"
-        "4. Импортируйте конфиг в Happ.\n"
+        "3. Нажмите «Показать данные для подключения» или «Показать QR-код».\n"
+        "4. Импортируйте данные в Happ.\n"
         "5. Включите подключение внутри приложения.\n\n"
         "Чаще всего удобнее импортировать QR-код.",
         reply_markup=builder.as_markup(),
@@ -82,9 +81,9 @@ async def instr_windows(callback: CallbackQuery):
         "1. Скачайте Happ для Windows.\n"
         "2. Установите и откройте приложение.\n"
         "3. В боте откройте «Моя подписка».\n"
-        "4. Возьмите ссылку или QR-код.\n"
-        "5. Импортируйте конфиг в Happ и подключитесь.\n\n"
-        "На ПК обычно удобнее вставить ссылку вручную.",
+        "4. Возьмите данные для подключения или QR-код.\n"
+        "5. Импортируйте их в Happ и подключитесь.\n\n"
+        "На ПК обычно удобнее вставить данные вручную.",
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
@@ -102,18 +101,19 @@ async def instr_mac(callback: CallbackQuery):
         "1. Скачайте Happ для macOS.\n"
         "2. Установите и откройте приложение.\n"
         "3. В боте откройте «Моя подписка».\n"
-        "4. Импортируйте ссылку или QR-код в Happ.\n"
+        "4. Импортируйте данные для подключения или QR-код в Happ.\n"
         "5. Включите подключение.\n\n"
-        "Если macOS спросит разрешения на защищенное подключение, подтвердите их.",
+        "Если система запросит разрешения для работы приложения, подтвердите их.",
         reply_markup=builder.as_markup(),
     )
     await callback.answer()
+
 
 @router.callback_query(F.data == "open_instructions_from_support")
 async def open_instructions_from_support(callback: CallbackQuery):
     await callback.message.answer(
         "Выберите платформу:\n\n"
-        "Я покажу, какое приложение установить и как импортировать конфиг.",
+        "Я покажу, какое приложение установить и как импортировать данные для подключения.",
         reply_markup=instructions_keyboard(),
     )
     await callback.answer()
