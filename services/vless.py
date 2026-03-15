@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Сервис для работы с 3x-ui / Xray"""
 
+import base64
 import json
 import logging
 import uuid
 from typing import Optional
+from urllib.parse import quote
 
 import requests
 
@@ -22,6 +24,10 @@ from config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+SERVER_DISPLAY_NAME = "🇩🇪 Германия"
+SERVER_DESCRIPTION = "Администрация Freeth • @freeth_support"
 
 
 class VLESSManager:
@@ -180,9 +186,22 @@ class VLESSManager:
 
         return None
 
-    def build_vless_link(self, client_uuid: str, remark: str) -> str:
+    def build_vless_link(
+        self,
+        client_uuid: str,
+        title: str = SERVER_DISPLAY_NAME,
+        server_description: str | None = SERVER_DESCRIPTION,
+    ) -> str:
         path = VLESS_PATH if VLESS_PATH.startswith("/") else f"/{VLESS_PATH}"
-        remark = remark.replace(" ", "_")
+
+        title_encoded = quote(title, safe="")
+
+        fragment = title_encoded
+        if server_description:
+            description_b64 = base64.urlsafe_b64encode(
+                server_description.encode("utf-8")
+            ).decode("utf-8").rstrip("=")
+            fragment = f"{title_encoded}?serverDescription={description_b64}"
 
         return (
             f"vless://{client_uuid}@{VLESS_DOMAIN}:{VLESS_PUBLIC_PORT}"
@@ -192,7 +211,7 @@ class VLESSManager:
             f"&path=%2F{path.lstrip('/')}"
             f"&host={VLESS_DOMAIN}"
             f"&sni={VLESS_SNI}"
-            f"#{remark}"
+            f"#{fragment}"
         )
 
     def add_client(
@@ -212,9 +231,9 @@ class VLESSManager:
 
         existing = self.find_client(email=xui_email)
         if existing:
-            inbound_id_existing, client_obj, _ = existing
+            _, client_obj, _ = existing
             logger.info("Client already exists in 3x-ui email=%s", xui_email)
-            link = self.build_vless_link(client_obj["id"], full_name or xui_email)
+            link = self.build_vless_link(client_obj["id"])
             return client_obj["id"], xui_email, link
 
         client_uuid = str(uuid.uuid4())
@@ -256,7 +275,7 @@ class VLESSManager:
                 logger.error("Ошибка addClient: %s", data.get("msg"))
                 return None
 
-            subscription_link = self.build_vless_link(client_uuid, full_name or xui_email)
+            subscription_link = self.build_vless_link(client_uuid)
             return client_uuid, xui_email, subscription_link
 
         except Exception as e:
@@ -277,7 +296,7 @@ class VLESSManager:
             logger.error("Клиент в 3x-ui не найден email=%s uuid=%s", email, client_uuid)
             return False
 
-        inbound_id, client_obj, clients = found
+        inbound_id, _, clients = found
 
         for item in clients:
             is_match = False
