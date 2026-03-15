@@ -20,6 +20,9 @@ class Client(Base):
 
     subscription_link = Column(Text, nullable=True)
 
+    happ_subscription_token = Column(String, unique=True, nullable=True, index=True)
+    happ_subscription_url = Column(Text, nullable=True)
+
     is_active = Column(Boolean, default=False, nullable=False)
     is_paid = Column(Boolean, default=False, nullable=False)
 
@@ -46,7 +49,7 @@ class SubscriptionHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
 
-    plan_code = Column(String, nullable=False)   # trial_7d / 1m / 3m / 12m
+    plan_code = Column(String, nullable=False)
     is_trial = Column(Boolean, default=False, nullable=False)
 
     starts_at = Column(DateTime, nullable=False)
@@ -56,6 +59,7 @@ class SubscriptionHistory(Base):
     notes = Column(Text, nullable=True)
 
     client = relationship("Client", back_populates="history")
+
 
 class YooKassaPayment(Base):
     __tablename__ = "yookassa_payments"

@@ -1,9 +1,11 @@
 from datetime import datetime
 import logging
 import re
+import secrets
 
 from sqlalchemy import select
 
+from config import APP_BASE_URL
 from database.db import AsyncSessionLocal
 from database.models import Client
 from services.vless import VLESSManager
@@ -17,6 +19,14 @@ def make_xui_email(telegram_id: str, full_name: str | None, fallback_id: int) ->
     base_name = re.sub(r"[^a-zA-Z0-9_а-яА-ЯёЁ]", "", base_name)
     base_name = base_name[:24] if base_name else f"user_{fallback_id}"
     return f"tg_{telegram_id}_{base_name}"
+
+
+def generate_happ_subscription_token() -> str:
+    return secrets.token_urlsafe(24)
+
+
+def build_happ_subscription_url(token: str) -> str:
+    return f"{APP_BASE_URL}/sub/{token}"
 
 
 async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
@@ -40,6 +50,15 @@ async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
         return client
 
 
+def ensure_happ_subscription_for_client(client: Client) -> None:
+    if not client.happ_subscription_token:
+        client.happ_subscription_token = generate_happ_subscription_token()
+
+    client.happ_subscription_url = build_happ_subscription_url(
+        client.happ_subscription_token
+    )
+
+
 async def create_vpn_access_for_client(telegram_id: str) -> bool:
     logger.info("create_vpn_access_for_client start telegram_id=%s", telegram_id)
 
@@ -53,13 +72,17 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
             logger.warning("Client not found for telegram_id=%s", telegram_id)
             return False
 
-        if client.xui_uuid and client.subscription_link:
-            logger.info("Client already has access telegram_id=%s", telegram_id)
-            return True
-
         if not client.paid_until:
             logger.warning("paid_until is empty for telegram_id=%s", telegram_id)
             return False
+
+        ensure_happ_subscription_for_client(client)
+
+        if client.xui_uuid and client.subscription_link:
+            logger.info("Client already has access telegram_id=%s", telegram_id)
+            client.updated_at = datetime.utcnow()
+            await session.commit()
+            return True
 
         xui_email = client.login or make_xui_email(
             telegram_id=client.telegram_id,

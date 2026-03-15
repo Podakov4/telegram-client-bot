@@ -25,6 +25,7 @@ DATABASE_URL = get_env("DATABASE_URL", required=True)
 
 SUPPORT_USERNAME = get_env("SUPPORT_USERNAME", "@your_support")
 SUPPORT_URL = get_env("SUPPORT_URL", "https://t.me/your_support")
+APP_BASE_URL = get_env("APP_BASE_URL", "https://freeth.ru").rstrip("/")
 
 XUI_BASE_URL = get_env("XUI_BASE_URL", required=True).rstrip("/")
 XUI_WEB_BASE_PATH = get_env("XUI_WEB_BASE_PATH", "").strip("/")
@@ -36,10 +37,6 @@ VLESS_PUBLIC_PORT = get_env_int("VLESS_PUBLIC_PORT", 443)
 VLESS_PATH = get_env("VLESS_PATH", "/vless")
 VLESS_SECURITY = get_env("VLESS_SECURITY", "tls")
 VLESS_SNI = get_env("VLESS_SNI", VLESS_DOMAIN)
-
-PRICE_1_MONTH = get_env("PRICE_1_MONTH", "199 ₽")
-PRICE_3_MONTHS = get_env("PRICE_3_MONTHS", "499 ₽")
-PRICE_12_MONTHS = get_env("PRICE_12_MONTHS", "1490 ₽")
 
 YOOKASSA_SHOP_ID = get_env("YOOKASSA_SHOP_ID", "")
 YOOKASSA_SECRET_KEY = get_env("YOOKASSA_SECRET_KEY", "")

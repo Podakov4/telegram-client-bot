@@ -28,7 +28,7 @@ router = Router()
 
 
 def format_profile_text(client: Client) -> str:
-    status_text = "активна" if client.is_active else "не активна"
+    status_text = "активна" if client.is_active else "неактивна"
     paid_text = "да" if client.is_paid else "нет"
 
     if client.paid_until:
@@ -52,22 +52,25 @@ def format_profile_text(client: Client) -> str:
         f"Telegram ID: <code>{client.telegram_id}</code>"
     )
 
+
 def format_subscription_text(client: Client) -> str:
     if not client.subscription_link:
         return (
             "<b>Подписка</b>\n\n"
             "У вас пока нет активного доступа.\n"
-            "Вы можете оформить подписку или сначала активировать пробный период."
+            "Сначала активируйте пробный период или оформите подписку."
         )
 
     return (
         "<b>Подписка</b>\n\n"
         "Доступ подготовлен.\n"
-        "Выберите действие ниже."
+        "Вы можете подключиться через Happ, посмотреть данные для подключения или QR-код."
     )
+
 
 def subscription_actions_keyboard():
     builder = InlineKeyboardBuilder()
+    builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
     builder.button(text="Показать данные для подключения", callback_data="show_vless_link")
     builder.button(text="Показать QR-код", callback_data="show_vless_qr")
     builder.button(text="Продлить подписку", callback_data="open_payment_menu")
@@ -171,6 +174,25 @@ async def cmd_subscription(message: Message):
         format_subscription_text(client),
         reply_markup=subscription_actions_keyboard(),
     )
+
+
+@router.callback_query(F.data == "show_happ_subscription")
+async def cb_show_happ_subscription(callback: CallbackQuery):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None or not client.happ_subscription_url:
+        await callback.message.answer("Ссылка для Happ пока не подготовлена.")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        "Ссылка для подключения в Happ:\n\n"
+        f"<code>{client.happ_subscription_url}</code>\n\n"
+        "Откройте Happ и импортируйте эту ссылку как подписку.",
+        parse_mode="HTML",
+        reply_markup=main_reply_keyboard(callback.from_user.id),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "show_vless_link")
@@ -374,6 +396,7 @@ async def help_message(message: Message):
             "• Документы\n"
             "• Поддержка\n\n"
             "В подписке доступны:\n"
+            "• Подключить в Happ\n"
             "• Показать данные для подключения\n"
             "• Показать QR-код\n"
             "• Продлить подписку\n\n"
@@ -397,8 +420,9 @@ async def help_message(message: Message):
             "• Документы\n"
             "• Поддержка\n\n"
             "В подписке доступны:\n"
+            "• Подключить в Happ\n"
             "• Показать данные для подключения\n"
             "• Показать QR-код\n"
-            "• Продлить подписку\n\n",
+            "• Продлить подписку\n",
             reply_markup=main_reply_keyboard(message.from_user.id),
         )
