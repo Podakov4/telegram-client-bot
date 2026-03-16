@@ -3,11 +3,12 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Response, Request
 from sqlalchemy import select
 
+from aiogram import Bot
+
 from config import SUPPORT_URL, BOT_TOKEN
 from database.db import AsyncSessionLocal
 from database.models import Client, YooKassaPayment
 from services.payments import process_successful_payment
-from aiogram import Bot
 
 app = FastAPI(title="Freeth API")
 
@@ -27,9 +28,12 @@ def build_happ_subscription_body(client: Client) -> str:
         "#profile-title: Freeth",
         "#profile-update-interval: 4",
         f"#support-url: {SUPPORT_URL}",
-        "#sub-info-text: Управление доступом и поддержка Freeth",
+        "#sub-info-color: blue",
+        "#sub-info-text: Поддержка и управление доступом Freeth",
         "#sub-info-button-text: Поддержка",
         f"#sub-info-button-link: {SUPPORT_URL}",
+        "#sub-expire: 1",
+        "#sub-expire-button-link: https://t.me/youFreethBot",
         "#subscriptions-collapse: 0",
         "#subscriptions-expand-now: 1",
         f"#subscription-userinfo: upload=0; download=0; total=0; expire={expire}",
