@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Request
 from sqlalchemy import select
 
-from config import SUPPORT_URL
+from config import SUPPORT_URL, BOT_TOKEN
 from database.db import AsyncSessionLocal
-from database.models import Client
+from database.models import Client, YooKassaPayment
+from services.payments import process_successful_payment
+from aiogram import Bot
 
-app = FastAPI(title="Freeth Happ Subscription API")
+app = FastAPI(title="Freeth API")
 
 
 def to_expire_unix(dt: datetime | None) -> int:
@@ -74,3 +76,42 @@ async def get_subscription(token: str):
                 "support-url": SUPPORT_URL,
             },
         )
+
+
+@app.post("/yookassa/webhook")
+async def yookassa_webhook(request: Request):
+    payload = await request.json()
+
+    event = payload.get("event")
+    obj = payload.get("object", {})
+    payment_id = obj.get("id")
+    status = obj.get("status")
+
+    if event != "payment.succeeded" or not payment_id or status != "succeeded":
+        return {"ok": True}
+
+    ok, _ = await process_successful_payment(payment_id)
+
+    if ok:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(YooKassaPayment).where(
+                    YooKassaPayment.external_payment_id == payment_id
+                )
+            )
+            row = result.scalar_one_or_none()
+
+            if row:
+                bot = Bot(token=BOT_TOKEN)
+                try:
+                    await bot.send_message(
+                        chat_id=int(row.telegram_id),
+                        text=(
+                            "Оплата подтверждена автоматически.\n"
+                            "Подписка активирована."
+                        ),
+                    )
+                finally:
+                    await bot.session.close()
+
+    return {"ok": True}

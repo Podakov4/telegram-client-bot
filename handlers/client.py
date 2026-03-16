@@ -20,7 +20,6 @@ from keyboards.reply import main_reply_keyboard
 from services.payments import (
     activate_trial_subscription,
     create_checkout_payment,
-    confirm_checkout_payment,
 )
 from services.subscriptions import get_expiring_clients
 
@@ -87,10 +86,9 @@ def payment_keyboard():
     return builder.as_markup()
 
 
-def payment_checkout_keyboard(payment_url: str, payment_id: str):
+def payment_checkout_keyboard(payment_url: str):
     builder = InlineKeyboardBuilder()
     builder.button(text="Перейти к оплате", url=payment_url)
-    builder.button(text="Проверить оплату", callback_data=f"check_pay:{payment_id}")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -115,7 +113,7 @@ async def start_checkout(callback: CallbackQuery, months: int):
     full_name = callback.from_user.full_name
 
     try:
-        payment_id, payment_url = await create_checkout_payment(
+        _, payment_url = await create_checkout_payment(
             telegram_id=telegram_id,
             full_name=full_name,
             months=months,
@@ -131,10 +129,9 @@ async def start_checkout(callback: CallbackQuery, months: int):
         "Для продолжения:\n"
         "1. Нажмите «Перейти к оплате»\n"
         "2. Завершите оплату\n"
-        "3. Вернитесь в бот\n"
-        "4. Нажмите «Проверить оплату»\n\n"
-        "После подтверждения подписка активируется автоматически.",
-        reply_markup=payment_checkout_keyboard(payment_url, payment_id),
+        "3. После успешной оплаты подписка активируется автоматически\n\n"
+        "Обычно это происходит без дополнительных действий в боте.",
+        reply_markup=payment_checkout_keyboard(payment_url),
     )
     await callback.answer()
 
@@ -313,22 +310,6 @@ async def cb_pay_3_months(callback: CallbackQuery):
 @router.callback_query(F.data == "pay_12_months")
 async def cb_pay_12_months(callback: CallbackQuery):
     await start_checkout(callback, months=12)
-
-
-@router.callback_query(F.data.startswith("check_pay:"))
-async def cb_check_pay(callback: CallbackQuery):
-    payment_id = callback.data.split(":", 1)[1]
-
-    ok, text = await confirm_checkout_payment(
-        telegram_id=str(callback.from_user.id),
-        payment_id=payment_id,
-    )
-
-    await callback.message.answer(
-        text,
-        reply_markup=main_reply_keyboard(callback.from_user.id),
-    )
-    await callback.answer()
 
 
 @router.message(Command("check_expiring"))

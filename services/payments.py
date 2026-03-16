@@ -189,6 +189,33 @@ async def create_checkout_payment(telegram_id: str, full_name: str | None, month
     return payment_id, confirmation_url
 
 
+async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(YooKassaPayment).where(
+                YooKassaPayment.external_payment_id == payment_id,
+            )
+        )
+        row = result.scalar_one_or_none()
+
+        if row is None:
+            return False, "Платеж не найден."
+
+        if row.is_processed:
+            return True, "Этот платеж уже был обработан раньше."
+
+        ok = await activate_subscription(row.telegram_id, row.months)
+        if not ok:
+            return False, "Оплата прошла, но не удалось активировать подписку."
+
+        row.status = "succeeded"
+        row.is_processed = True
+        row.processed_at = datetime.utcnow()
+        await session.commit()
+
+        return True, "Оплата подтверждена, подписка активирована."
+
+
 async def confirm_checkout_payment(telegram_id: str, payment_id: str) -> tuple[bool, str]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -207,19 +234,9 @@ async def confirm_checkout_payment(telegram_id: str, payment_id: str) -> tuple[b
 
         payment = await yk_get_payment(payment_id)
         row.status = payment.get("status", row.status)
-
-        if payment.get("status") != "succeeded":
-            await session.commit()
-            return False, f"Текущий статус платежа: {payment.get('status', 'unknown')}"
-
-        ok = await activate_subscription(telegram_id, row.months)
-        if not ok:
-            await session.commit()
-            return False, "Оплата прошла, но не удалось активировать подписку."
-
-        row.is_processed = True
-        row.status = "succeeded"
-        row.processed_at = datetime.utcnow()
         await session.commit()
 
-        return True, "Оплата подтверждена, подписка активирована."
+        if payment.get("status") != "succeeded":
+            return False, f"Текущий статус платежа: {payment.get('status', 'unknown')}"
+
+    return await process_successful_payment(payment_id)
