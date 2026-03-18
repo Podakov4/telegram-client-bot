@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import uuid
@@ -28,8 +27,7 @@ from config import (
 logger = logging.getLogger(__name__)
 
 
-SERVER_DISPLAY_NAME = "🇩🇪 Германия"
-SERVER_DESCRIPTION = "Администрация Freeth • @freeth_support"
+SERVER_DISPLAY_NAME = "Germany"
 
 
 class VLESSManager:
@@ -82,24 +80,57 @@ class VLESSManager:
             logger.exception("Ошибка логина в 3x-ui: %s", e)
             return False
 
+    def _list_inbounds(self) -> list[dict]:
+        response = self.session.get(self._api_url("list"), timeout=15)
+        logger.info("inbounds list status=%s", response.status_code)
+
+        if response.status_code != 200:
+            logger.error("Не удалось получить список inbound: HTTP %s", response.status_code)
+            return []
+
+        data = response.json()
+        if not data.get("success"):
+            logger.error("Ошибка списка inbound: %s", data.get("msg"))
+            return []
+
+        return data.get("obj", [])
+
     def find_inbound_by_port(self, port: int) -> Optional[int]:
+        """
+        В твоей версии x-ui API inbound list может возвращать port=0 и protocol=""
+        даже для рабочего inbound. Поэтому:
+        1. сначала пробуем обычный поиск по port
+        2. если не нашли, берём первый inbound, у которого есть clients в settings
+        """
         try:
-            response = self.session.get(self._api_url("list"), timeout=15)
+            inbounds = self._list_inbounds()
 
-            logger.info("inbounds list status=%s", response.status_code)
+            for inbound in inbounds:
+                inbound_port = inbound.get("port")
+                if str(inbound_port) == str(port):
+                    logger.info(
+                        "Found inbound id=%s for port=%s (raw=%s)",
+                        inbound.get("id"),
+                        port,
+                        inbound_port,
+                    )
+                    return inbound.get("id")
 
-            if response.status_code != 200:
-                logger.error("Не удалось получить список inbound: HTTP %s", response.status_code)
-                return None
+            for inbound in inbounds:
+                settings_raw = inbound.get("settings") or "{}"
+                try:
+                    settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+                except Exception:
+                    settings = {}
 
-            data = response.json()
-            if not data.get("success"):
-                logger.error("Ошибка списка inbound: %s", data.get("msg"))
-                return None
-
-            for inbound in data.get("obj", []):
-                if inbound.get("port") == port:
-                    logger.info("Found inbound id=%s for port=%s", inbound.get("id"), port)
+                clients = settings.get("clients", [])
+                if clients:
+                    logger.warning(
+                        "Inbound by port=%s not found, using fallback inbound id=%s with %s clients",
+                        port,
+                        inbound.get("id"),
+                        len(clients),
+                    )
                     return inbound.get("id")
 
             logger.error("Inbound с портом %s не найден", port)
@@ -226,18 +257,13 @@ class VLESSManager:
         self,
         client_uuid: str,
         title: str = SERVER_DISPLAY_NAME,
-        server_description: str | None = SERVER_DESCRIPTION,
     ) -> str:
+        """
+        Максимально простая и совместимая ссылка для Happ.
+        Без нестандартного serverDescription.
+        """
         path = VLESS_PATH if VLESS_PATH.startswith("/") else f"/{VLESS_PATH}"
-
         title_encoded = quote(title, safe="")
-
-        fragment = title_encoded
-        if server_description:
-            description_b64 = base64.urlsafe_b64encode(
-                server_description.encode("utf-8")
-            ).decode("utf-8").rstrip("=")
-            fragment = f"{title_encoded}?serverDescription={description_b64}"
 
         return (
             f"vless://{client_uuid}@{VLESS_DOMAIN}:{VLESS_PUBLIC_PORT}"
@@ -247,7 +273,7 @@ class VLESSManager:
             f"&path=%2F{path.lstrip('/')}"
             f"&host={VLESS_DOMAIN}"
             f"&sni={VLESS_SNI}"
-            f"#{fragment}"
+            f"#{title_encoded}"
         )
 
     def add_client(
