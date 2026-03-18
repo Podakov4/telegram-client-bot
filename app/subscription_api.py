@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Optional
 
 from aiogram import Bot
@@ -9,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import SUPPORT_URL, BOT_TOKEN
+from config import BOT_TOKEN
 from database.db import AsyncSessionLocal, get_db
 from database.models import Client, YooKassaPayment
 from services.auth_service import (
@@ -66,37 +65,10 @@ class RevokeDevicePayload(BaseModel):
 # Helpers
 # =========================
 
-def to_expire_unix(dt: datetime | None) -> int:
-    if not dt:
-        return 0
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp())
-
-
 def build_happ_subscription_body(client: Client) -> str:
-    expire = to_expire_unix(client.paid_until)
-
-    lines = [
-        "#profile-title: Freeth",
-        "#profile-update-interval: 4",
-        f"#support-url: {SUPPORT_URL}",
-        "#sub-info-color: blue",
-        "#sub-info-text: Поддержка и управление доступом Freeth",
-        "#sub-info-button-text: Поддержка",
-        f"#sub-info-button-link: {SUPPORT_URL}",
-        "#sub-expire: 1",
-        "#sub-expire-button-link: https://t.me/youFreethBot",
-        "#subscriptions-collapse: 0",
-        "#subscriptions-expand-now: 1",
-        f"#subscription-userinfo: upload=0; download=0; total=0; expire={expire}",
-        "",
-    ]
-
-    if client.subscription_link:
-        lines.append(client.subscription_link)
-
-    return "\n".join(lines) + "\n"
+    if not client.subscription_link:
+        return ""
+    return client.subscription_link.strip() + "\n"
 
 
 def extract_bearer_token(authorization: Optional[str]) -> str:
@@ -219,12 +191,9 @@ async def get_subscription(token: str):
             media_type="text/plain",
             headers={
                 "Content-Type": "text/plain; charset=utf-8",
-                "Content-Disposition": f'attachment; filename="freeth-{client.id}.txt"',
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                 "Pragma": "no-cache",
                 "Expires": "0",
-                "profile-title": "Freeth",
-                "support-url": SUPPORT_URL,
             },
         )
 
