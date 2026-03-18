@@ -22,6 +22,7 @@ def get_env_int(name: str, default: int | None = None, required: bool = False) -
 
 BOT_TOKEN = get_env("BOT_TOKEN", required=True)
 DATABASE_URL = get_env("DATABASE_URL", required=True)
+SECRET_KEY = get_env("SECRET_KEY", required=True)
 
 SUPPORT_USERNAME = get_env("SUPPORT_USERNAME", "@your_support")
 SUPPORT_URL = get_env("SUPPORT_URL", "https://t.me/your_support")

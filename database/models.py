@@ -1,8 +1,14 @@
 from datetime import datetime
+from uuid import uuid4
+
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
 
 from database.db import Base
+
+
+def generate_public_id() -> str:
+    return uuid4().hex
 
 
 class Client(Base):
@@ -10,11 +16,20 @@ class Client(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    # Existing identity
     telegram_id = Column(String, unique=True, nullable=False, index=True)
     full_name = Column(String, nullable=True)
-
     login = Column(String, unique=True, nullable=True)
 
+    # New cross-platform identity fields
+    public_id = Column(String, unique=True, nullable=False, index=True, default=generate_public_id)
+    email = Column(String, unique=True, nullable=True, index=True)
+    status = Column(String, nullable=False, default="active")  # active / blocked / deleted
+    created_via = Column(String, nullable=False, default="telegram")  # telegram/android/ios/windows/macos/admin
+    default_language = Column(String, nullable=True, default="ru")
+    last_login_at = Column(DateTime, nullable=True)
+
+    # Existing Xray / VLESS fields
     xui_uuid = Column(String, unique=True, nullable=True)
     xui_email = Column(String, unique=True, nullable=True)
 
@@ -40,7 +55,117 @@ class Client(Base):
         nullable=False,
     )
 
-    history = relationship("SubscriptionHistory", back_populates="client")
+    history = relationship(
+        "SubscriptionHistory",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+    devices = relationship(
+        "Device",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+    login_codes = relationship(
+        "LoginCode",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+    app_sessions = relationship(
+        "AppSession",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+
+
+class Plan(Base):
+    __tablename__ = "plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+
+    duration_days = Column(Integer, nullable=False)
+    max_devices = Column(Integer, default=1, nullable=False)
+    traffic_limit_gb = Column(Integer, nullable=True)
+
+    is_trial = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+class Device(Base):
+    __tablename__ = "devices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+
+    device_uid = Column(String, unique=True, nullable=False, index=True)
+    platform = Column(String, nullable=False, index=True)  # android / ios / windows / macos
+    device_name = Column(String, nullable=True)
+    app_version = Column(String, nullable=True)
+    os_version = Column(String, nullable=True)
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_revoked = Column(Boolean, default=False, nullable=False)
+
+    last_seen_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    client = relationship("Client", back_populates="devices")
+    sessions = relationship(
+        "AppSession",
+        back_populates="device",
+        cascade="all, delete-orphan",
+    )
+
+
+class LoginCode(Base):
+    __tablename__ = "login_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+
+    code = Column(String, unique=True, nullable=False, index=True)
+    platform = Column(String, nullable=True)  # android / ios / windows / macos / any
+    device_uid = Column(String, nullable=True)
+
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    client = relationship("Client", back_populates="login_codes")
+
+
+class AppSession(Base):
+    __tablename__ = "app_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+
+    refresh_token_hash = Column(String, unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = Column(DateTime, nullable=True)
+
+    client = relationship("Client", back_populates="app_sessions")
+    device = relationship("Device", back_populates="sessions")
 
 
 class SubscriptionHistory(Base):

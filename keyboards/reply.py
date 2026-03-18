@@ -8,8 +8,12 @@ def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             KeyboardButton(text="Моя подписка"),
         ],
         [
-            KeyboardButton(text="Пробный период 7 дней"),
+            KeyboardButton(text="Мои устройства"),
             KeyboardButton(text="Оплата"),
+        ],
+        [
+            KeyboardButton(text="Пробный период 7 дней"),
+            KeyboardButton(text="Войти в приложение"),
         ],
         [
             KeyboardButton(text="Инструкции"),

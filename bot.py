@@ -3,13 +3,14 @@
 
 import asyncio
 import logging
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from database import create_tables
-from handlers import common, client, menu, admin, instructions, support, documents, news
 import config
+from database import create_tables
+from handlers import admin, client, common, documents, instructions, menu, news, support
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
@@ -42,7 +43,11 @@ async def main():
 
     logger.info("✅ Бот запущен и готов к работе!")
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        logger.info("🔌 Сессия бота закрыта")
 
 
 if __name__ == "__main__":

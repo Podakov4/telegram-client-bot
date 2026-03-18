@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Сервис для работы с 3x-ui / Xray"""
 
+from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -186,6 +188,14 @@ class VLESSManager:
 
         return None
 
+    def client_exists(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> bool:
+        return self.find_client(email=email, client_uuid=client_uuid) is not None
+
     def build_vless_link(
         self,
         client_uuid: str,
@@ -233,6 +243,14 @@ class VLESSManager:
         if existing:
             _, client_obj, _ = existing
             logger.info("Client already exists in 3x-ui email=%s", xui_email)
+
+            self.update_client(
+                email=xui_email,
+                enable=True,
+                expiry_time_ms=paid_until_ts_ms,
+                total_gb=total_gb,
+            )
+
             link = self.build_vless_link(client_obj["id"])
             return client_obj["id"], xui_email, link
 
@@ -334,10 +352,44 @@ class VLESSManager:
         email: str | None = None,
         client_uuid: str | None = None,
         expiry_time_ms: int | None = None,
+        total_gb: int | None = None,
     ) -> bool:
         return self.update_client(
             email=email,
             client_uuid=client_uuid,
             enable=True,
             expiry_time_ms=expiry_time_ms,
+            total_gb=total_gb,
+        )
+
+    def get_client_link(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> Optional[str]:
+        found = self.find_client(email=email, client_uuid=client_uuid)
+        if not found:
+            return None
+
+        _, client_obj, _ = found
+        uuid_value = client_obj.get("id")
+        if not uuid_value:
+            return None
+
+        return self.build_vless_link(uuid_value)
+
+    def ensure_client_active(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+        expiry_time_ms: int | None = None,
+        total_gb: int | None = None,
+    ) -> bool:
+        return self.enable_client(
+            email=email,
+            client_uuid=client_uuid,
+            expiry_time_ms=expiry_time_ms,
+            total_gb=total_gb,
         )
