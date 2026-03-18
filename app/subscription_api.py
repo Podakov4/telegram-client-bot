@@ -20,10 +20,7 @@ from services.auth_service import (
     InvalidRefreshTokenError,
     RevokedSessionError,
 )
-from services.client_access import (
-    get_client_vpn_access_by_client_id,
-    sync_vpn_access_for_client,
-)
+from services.client_access import get_client_vpn_access_by_client_id
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.payments import process_successful_payment
 from services.subscriptions import (
@@ -429,7 +426,6 @@ async def revoke_my_device(
 async def get_vpn_access(
     current_client: Client = Depends(get_current_client),
 ):
-    await sync_vpn_access_for_client(current_client.telegram_id)
     access = await get_client_vpn_access_by_client_id(current_client.id)
 
     if not access:
@@ -445,7 +441,6 @@ async def get_vpn_access(
 async def get_vpn_subscription_url(
     current_client: Client = Depends(get_current_client),
 ):
-    await sync_vpn_access_for_client(current_client.telegram_id)
     access = await get_client_vpn_access_by_client_id(current_client.id)
 
     if not access:
