@@ -136,9 +136,34 @@ class VLESSManager:
         return settings.get("clients", [])
 
     def _save_clients_to_inbound(self, inbound_id: int, clients: list[dict]) -> bool:
+        inbound = self.get_inbound(inbound_id)
+        if not inbound:
+            logger.error("Не удалось получить полный inbound для сохранения clients")
+            return False
+
+        settings_raw = inbound.get("settings") or "{}"
+        if isinstance(settings_raw, str):
+            settings = json.loads(settings_raw)
+        else:
+            settings = settings_raw
+
+        settings["clients"] = clients
+
         payload = {
             "id": inbound_id,
-            "settings": json.dumps({"clients": clients}, ensure_ascii=False),
+            "up": inbound.get("up", 0),
+            "down": inbound.get("down", 0),
+            "total": inbound.get("total", 0),
+            "remark": inbound.get("remark", ""),
+            "enable": inbound.get("enable", True),
+            "expiryTime": inbound.get("expiryTime", 0),
+            "listen": inbound.get("listen", ""),
+            "port": inbound.get("port"),
+            "protocol": inbound.get("protocol"),
+            "settings": json.dumps(settings, ensure_ascii=False),
+            "streamSettings": inbound.get("streamSettings", "{}"),
+            "sniffing": inbound.get("sniffing", "{}"),
+            "allocate": inbound.get("allocate", "{}"),
         }
 
         try:
@@ -149,6 +174,7 @@ class VLESSManager:
 
             if response.status_code != 200:
                 logger.error("Ошибка update inbound: HTTP %s", response.status_code)
+                logger.error("Response text: %s", response.text)
                 return False
 
             data = response.json()
@@ -286,6 +312,7 @@ class VLESSManager:
 
             if response.status_code != 200:
                 logger.error("Ошибка addClient: HTTP %s", response.status_code)
+                logger.error("Response text: %s", response.text)
                 return None
 
             data = response.json()
@@ -315,6 +342,7 @@ class VLESSManager:
             return False
 
         inbound_id, _, clients = found
+        updated = False
 
         for item in clients:
             is_match = False
@@ -330,7 +358,12 @@ class VLESSManager:
                     item["expiryTime"] = expiry_time_ms
                 if total_gb is not None:
                     item["totalGB"] = total_gb * 1024 * 1024 * 1024
+                updated = True
                 break
+
+        if not updated:
+            logger.error("Совпадающий клиент для update не найден email=%s uuid=%s", email, client_uuid)
+            return False
 
         return self._save_clients_to_inbound(inbound_id, clients)
 
