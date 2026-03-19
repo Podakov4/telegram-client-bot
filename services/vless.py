@@ -1,346 +1,448 @@
+#!/usr/bin/env python3
+"""Сервис для работы с 3x-ui / Xray"""
+
 from __future__ import annotations
 
-from datetime import datetime
+import json
 import logging
-import re
-import secrets
+import uuid
 from typing import Optional
+from urllib.parse import quote
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+import requests
 
-from config import APP_BASE_URL
-from database.db import AsyncSessionLocal
-from database.models import Client
+from config import (
+    XUI_BASE_URL,
+    XUI_WEB_BASE_PATH,
+    XUI_USERNAME,
+    XUI_PASSWORD,
+    VLESS_DOMAIN,
+    VLESS_PUBLIC_PORT,
+    VLESS_PATH,
+    VLESS_SECURITY,
+    VLESS_SNI,
+    XRAY_INBOUND_PORT,
+)
 
 logger = logging.getLogger(__name__)
 
-
-class ClientAccessError(Exception):
-    pass
-
-
-def make_xui_email(telegram_id: str, full_name: str | None, fallback_id: int) -> str:
-    base_name = (full_name or f"user_{fallback_id}").lower().strip()
-    base_name = base_name.replace(" ", "_")
-    base_name = re.sub(r"[^a-zA-Z0-9_а-яА-ЯёЁ]", "", base_name)
-    base_name = base_name[:24] if base_name else f"user_{fallback_id}"
-    return f"tg_{telegram_id}_{base_name}"
-
-
-def generate_happ_subscription_token() -> str:
-    return secrets.token_urlsafe(24)
-
-
-def build_happ_subscription_url(token: str) -> str:
-    return f"{APP_BASE_URL}/sub/{token}"
-
-
-def ensure_happ_subscription_for_client(client: Client) -> None:
-    if not client.happ_subscription_token:
-        client.happ_subscription_token = generate_happ_subscription_token()
-
-    client.happ_subscription_url = build_happ_subscription_url(
-        client.happ_subscription_token
-    )
-
-
-def is_client_subscription_active(client: Client) -> bool:
-    if client.status != "active":
-        return False
-    if not client.is_active or not client.is_paid:
-        return False
-    if not client.paid_until:
-        return False
-    return client.paid_until > datetime.utcnow()
-
-
-def serialize_vpn_access(client: Client) -> dict:
-    subscription_active = is_client_subscription_active(client)
-
-    return {
-        "access": bool(client.xui_uuid and client.subscription_link),
-        "subscription_active": subscription_active,
-        "expires_at": client.paid_until.isoformat() if client.paid_until else None,
-        "vpn": {
-            "type": "xray_vless",
-            "subscription_url": client.happ_subscription_url,
-            "manual_url": client.subscription_link,
-            "supports": ["android", "ios", "windows", "macos"],
-        },
-    }
-
-
-async def ensure_client_exists(telegram_id: str, full_name: str) -> Client:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            client = Client(
-                telegram_id=str(telegram_id),
-                full_name=full_name,
-                is_active=False,
-                is_paid=False,
-                created_via="telegram",
-                status="active",
-            )
-            session.add(client)
-            await session.commit()
-            await session.refresh(client)
-
-        return client
-
-
-async def get_client_by_telegram_id(telegram_id: str) -> Optional[Client]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        return result.scalar_one_or_none()
-
-
-async def get_client_by_id(client_id: int) -> Optional[Client]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
-        return result.scalar_one_or_none()
-
-
-async def get_client_vpn_access_by_client_id(client_id: int) -> Optional[dict]:
-    client = await get_client_by_id(client_id)
-    if not client:
-        return None
-    return serialize_vpn_access(client)
-
-
-async def get_client_vpn_access_by_telegram_id(telegram_id: str) -> Optional[dict]:
-    client = await get_client_by_telegram_id(telegram_id)
-    if not client:
-        return None
-    return serialize_vpn_access(client)
-
-
-async def _refresh_subscription_link(
-    session: AsyncSession,
-    client: Client,
-    manager: VLESSManager,
-) -> None:
-    """
-    Обновляет subscription_link в БД по текущему UUID/email без пересоздания клиента.
-    """
-    link = None
-
-    try:
-        if client.xui_email:
-            link = manager.get_client_link(email=client.xui_email)
-        if not link and client.xui_uuid:
-            link = manager.get_client_link(client_uuid=client.xui_uuid)
-        if not link and client.xui_uuid:
-            link = manager.build_vless_link(client.xui_uuid)
-    except Exception:
-        logger.exception("Failed to refresh subscription link for client_id=%s", client.id)
-        link = None
-
-    if link:
-        client.subscription_link = link
-        client.updated_at = datetime.utcnow()
-        await session.commit()
-
-
-async def _update_existing_client_access(
-    session: AsyncSession,
-    client: Client,
-) -> bool:
-    """
-    Если клиент уже существует в 3x-ui, синхронизируем срок действия, включаем его
-    и обновляем subscription_link в БД.
-    """
-    if not client.paid_until:
-        logger.warning("Cannot update access: paid_until is empty for client_id=%s", client.id)
-        return False
-
-    manager = VLESSManager()
-    paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
-
-    updated = False
-
-    try:
-        if client.xui_email:
-            updated = manager.enable_client(
-                email=client.xui_email,
-                expiry_time_ms=paid_until_ts_ms,
-                total_gb=0,
-            )
-        elif client.xui_uuid:
-            updated = manager.enable_client(
-                client_uuid=client.xui_uuid,
-                expiry_time_ms=paid_until_ts_ms,
-                total_gb=0,
-            )
-    except TypeError:
-        logger.exception("enable_client signature mismatch")
-        updated = False
-    except Exception:
-        logger.exception("Failed to enable/update existing client access client_id=%s", client.id)
-        updated = False
-
-    if updated:
-        if not client.happ_subscription_url:
-            ensure_happ_subscription_for_client(client)
-
-        await _refresh_subscription_link(session, client, manager)
-
-        client.updated_at = datetime.utcnow()
-        await session.commit()
-        return True
-
-    return False
-
-
-async def create_vpn_access_for_client(telegram_id: str) -> bool:
-    logger.info("create_vpn_access_for_client start telegram_id=%s", telegram_id)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            logger.warning("Client not found for telegram_id=%s", telegram_id)
-            return False
-
-        if not client.paid_until:
-            logger.warning("paid_until is empty for telegram_id=%s", telegram_id)
-            return False
-
-        ensure_happ_subscription_for_client(client)
-
-        if client.xui_uuid or client.xui_email:
-            logger.info(
-                "Client already has x-ui identity, syncing expiry telegram_id=%s",
-                telegram_id,
-            )
-            synced = await _update_existing_client_access(session, client)
-            if synced:
-                return True
-
-        xui_email = client.login or make_xui_email(
-            telegram_id=client.telegram_id,
-            full_name=client.full_name,
-            fallback_id=client.id,
-        )
-
-        manager = VLESSManager()
-        paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
-
-        created = manager.add_client(
-            telegram_id=client.telegram_id,
-            full_name=client.full_name or xui_email,
-            xui_email=xui_email,
-            paid_until_ts_ms=paid_until_ts_ms,
-            total_gb=0,
-        )
-
-        if not created:
-            logger.error("Failed to create client access for telegram_id=%s", telegram_id)
-            return False
-
-        xui_uuid, xui_email, subscription_link = created
-
-        client.login = xui_email
-        client.xui_email = xui_email
-        client.xui_uuid = xui_uuid
-        client.subscription_link = subscription_link
-        client.updated_at = datetime.utcnow()
-
-        await session.commit()
-        return True
-
-
-async def create_vpn_access_for_client_id(client_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            logger.warning("Client not found for client_id=%s", client_id)
-            return False
-
-        return await create_vpn_access_for_client(client.telegram_id)
-
-
-async def disable_vpn_access_for_client(telegram_id: str) -> bool:
-    logger.info("disable_vpn_access_for_client start telegram_id=%s", telegram_id)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            logger.warning("Client not found for telegram_id=%s", telegram_id)
-            return False
-
-        if not client.xui_email and not client.xui_uuid:
-            logger.info("Client has no xray access telegram_id=%s", telegram_id)
-            return True
-
-        manager = VLESSManager()
-
-        disabled = False
+SERVER_DISPLAY_NAME = "Germany"
+
+
+class VLESSManager:
+    def __init__(
+        self,
+        panel_url: str | None = None,
+        username: str | None = None,
+        password: str | None = None,
+    ):
+        self.panel_url = (panel_url or XUI_BASE_URL).rstrip("/")
+        self.username = username or XUI_USERNAME
+        self.password = password or XUI_PASSWORD
+        self.session = requests.Session()
+
+    def _join_url(self, path: str) -> str:
+        base = self.panel_url.rstrip("/")
+        prefix = f"/{XUI_WEB_BASE_PATH}" if XUI_WEB_BASE_PATH else ""
+        return f"{base}{prefix}{path}"
+
+    def _api_url(self, path: str) -> str:
+        return self._join_url(f"/panel/api/inbounds/{path}")
+
+    def login(self) -> bool:
         try:
-            if client.xui_email:
-                disabled = manager.disable_client(email=client.xui_email)
-            elif client.xui_uuid:
-                disabled = manager.disable_client(client_uuid=client.xui_uuid)
-        except TypeError:
-            logger.exception("disable_client signature mismatch")
-            disabled = False
-        except Exception:
-            logger.exception("Failed to disable VPN access for telegram_id=%s", telegram_id)
-            disabled = False
+            login_url = self._join_url("/login")
+            response = self.session.post(
+                login_url,
+                json={
+                    "username": self.username,
+                    "password": self.password,
+                },
+                timeout=15,
+            )
 
-        if disabled:
-            client.updated_at = datetime.utcnow()
-            await session.commit()
+            logger.info("3x-ui login url=%s", login_url)
+            logger.info("3x-ui login status=%s", response.status_code)
+
+            if response.status_code != 200:
+                logger.error("3x-ui login failed: HTTP %s", response.status_code)
+                return False
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("3x-ui login failed: %s", data.get("msg"))
+                return False
+
             return True
-
-        return False
-
-
-async def disable_vpn_access_for_client_id(client_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            logger.warning("Client not found for client_id=%s", client_id)
+        except Exception as e:
+            logger.exception("Ошибка логина в 3x-ui: %s", e)
             return False
 
-        return await disable_vpn_access_for_client(client.telegram_id)
+    def _list_inbounds(self) -> list[dict]:
+        response = self.session.get(self._api_url("list"), timeout=15)
+        logger.info("inbounds list status=%s", response.status_code)
 
+        if response.status_code != 200:
+            logger.error("Не удалось получить список inbound: HTTP %s", response.status_code)
+            return []
 
-async def sync_vpn_access_for_client(telegram_id: str) -> bool:
-    """
-    Синхронизирует доступ с текущим состоянием подписки:
-    - если подписка активна -> создаём/обновляем доступ
-    - если подписка истекла -> отключаем доступ
-    """
-    client = await get_client_by_telegram_id(telegram_id)
-    if not client:
-        return False
+        data = response.json()
+        if not data.get("success"):
+            logger.error("Ошибка списка inbound: %s", data.get("msg"))
+            return []
 
-    if is_client_subscription_active(client):
-        return await create_vpn_access_for_client(telegram_id)
+        return data.get("obj", [])
 
-    return await disable_vpn_access_for_client(telegram_id)
+    def find_inbound_by_port(self, port: int) -> Optional[int]:
+        """
+        В твоей версии x-ui API inbound list может возвращать port=0 и protocol=""
+        даже для рабочего inbound. Поэтому:
+        1. сначала пробуем обычный поиск по port
+        2. если не нашли, берём первый inbound, у которого есть clients в settings
+        """
+        try:
+            inbounds = self._list_inbounds()
+
+            for inbound in inbounds:
+                inbound_port = inbound.get("port")
+                if str(inbound_port) == str(port):
+                    logger.info(
+                        "Found inbound id=%s for port=%s (raw=%s)",
+                        inbound.get("id"),
+                        port,
+                        inbound_port,
+                    )
+                    return inbound.get("id")
+
+            for inbound in inbounds:
+                settings_raw = inbound.get("settings") or "{}"
+                try:
+                    settings = json.loads(settings_raw) if isinstance(settings_raw, str) else settings_raw
+                except Exception:
+                    settings = {}
+
+                clients = settings.get("clients", [])
+                if clients:
+                    logger.warning(
+                        "Inbound by port=%s not found, using fallback inbound id=%s with %s clients",
+                        port,
+                        inbound.get("id"),
+                        len(clients),
+                    )
+                    return inbound.get("id")
+
+            logger.error("Inbound с портом %s не найден", port)
+            return None
+        except Exception as e:
+            logger.exception("Ошибка поиска inbound: %s", e)
+            return None
+
+    def get_inbound(self, inbound_id: int) -> Optional[dict]:
+        try:
+            response = self.session.get(self._api_url(f"get/{inbound_id}"), timeout=15)
+            logger.info("get inbound status=%s", response.status_code)
+
+            if response.status_code != 200:
+                logger.error("Не удалось получить inbound: HTTP %s", response.status_code)
+                return None
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка получения inbound: %s", data.get("msg"))
+                return None
+
+            return data.get("obj")
+        except Exception as e:
+            logger.exception("Ошибка получения inbound: %s", e)
+            return None
+
+    def _load_clients_from_inbound(self, inbound: dict) -> list[dict]:
+        settings_raw = inbound.get("settings") or "{}"
+        if isinstance(settings_raw, str):
+            settings = json.loads(settings_raw)
+        else:
+            settings = settings_raw
+        return settings.get("clients", [])
+
+    def _save_clients_to_inbound(self, inbound_id: int, clients: list[dict]) -> bool:
+        inbound = self.get_inbound(inbound_id)
+        if not inbound:
+            logger.error("Не удалось получить полный inbound для сохранения clients")
+            return False
+
+        settings_raw = inbound.get("settings") or "{}"
+        if isinstance(settings_raw, str):
+            settings = json.loads(settings_raw)
+        else:
+            settings = settings_raw
+
+        settings["clients"] = clients
+
+        payload = {
+            "id": inbound_id,
+            "up": inbound.get("up", 0),
+            "down": inbound.get("down", 0),
+            "total": inbound.get("total", 0),
+            "remark": inbound.get("remark", ""),
+            "enable": inbound.get("enable", True),
+            "expiryTime": inbound.get("expiryTime", 0),
+            "listen": inbound.get("listen", ""),
+            "port": inbound.get("port"),
+            "protocol": inbound.get("protocol"),
+            "settings": json.dumps(settings, ensure_ascii=False),
+            "streamSettings": inbound.get("streamSettings", "{}"),
+            "sniffing": inbound.get("sniffing", "{}"),
+            "allocate": inbound.get("allocate", "{}"),
+        }
+
+        try:
+            update_url = self._api_url(f"update/{inbound_id}")
+            response = self.session.post(update_url, json=payload, timeout=20)
+
+            logger.info("update inbound status=%s", response.status_code)
+
+            if response.status_code != 200:
+                logger.error("Ошибка update inbound: HTTP %s", response.status_code)
+                logger.error("Response text: %s", response.text)
+                return False
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка update inbound: %s", data.get("msg"))
+                return False
+
+            return True
+        except Exception as e:
+            logger.exception("Ошибка сохранения inbound: %s", e)
+            return False
+
+    def find_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> tuple[int, dict, list[dict]] | None:
+        if not self.login():
+            return None
+
+        inbound_id = self.find_inbound_by_port(XRAY_INBOUND_PORT)
+        if not inbound_id:
+            return None
+
+        inbound = self.get_inbound(inbound_id)
+        if not inbound:
+            return None
+
+        clients = self._load_clients_from_inbound(inbound)
+
+        for client in clients:
+            if email and client.get("email") == email:
+                return inbound_id, client, clients
+            if client_uuid and client.get("id") == client_uuid:
+                return inbound_id, client, clients
+
+        return None
+
+    def client_exists(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> bool:
+        return self.find_client(email=email, client_uuid=client_uuid) is not None
+
+    def build_vless_link(
+        self,
+        client_uuid: str,
+        title: str = SERVER_DISPLAY_NAME,
+    ) -> str:
+        path = VLESS_PATH if VLESS_PATH.startswith("/") else f"/{VLESS_PATH}"
+        title_encoded = quote(title, safe="")
+
+        return (
+            f"vless://{client_uuid}@{VLESS_DOMAIN}:{VLESS_PUBLIC_PORT}"
+            f"?type=ws"
+            f"&security={VLESS_SECURITY}"
+            f"&encryption=none"
+            f"&path=%2F{path.lstrip('/')}"
+            f"&host={VLESS_DOMAIN}"
+            f"&sni={VLESS_SNI}"
+            f"#{title_encoded}"
+        )
+
+    def add_client(
+        self,
+        telegram_id: str,
+        full_name: str,
+        xui_email: str,
+        paid_until_ts_ms: int = 0,
+        total_gb: int = 0,
+    ) -> tuple[str, str, str] | None:
+        if not self.login():
+            return None
+
+        inbound_id = self.find_inbound_by_port(XRAY_INBOUND_PORT)
+        if not inbound_id:
+            return None
+
+        existing = self.find_client(email=xui_email)
+        if existing:
+            _, client_obj, _ = existing
+            logger.info("Client already exists in 3x-ui email=%s", xui_email)
+
+            self.update_client(
+                email=xui_email,
+                enable=True,
+                expiry_time_ms=paid_until_ts_ms,
+                total_gb=total_gb,
+            )
+
+            link = self.build_vless_link(client_obj["id"])
+            return client_obj["id"], xui_email, link
+
+        client_uuid = str(uuid.uuid4())
+
+        settings = {
+            "clients": [
+                {
+                    "id": client_uuid,
+                    "email": xui_email,
+                    "enable": True,
+                    "expiryTime": paid_until_ts_ms,
+                    "flow": "",
+                    "limitIp": 0,
+                    "totalGB": total_gb * 1024 * 1024 * 1024,
+                    "tgId": telegram_id,
+                    "subId": "",
+                    "reset": 0,
+                }
+            ]
+        }
+
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps(settings),
+        }
+
+        try:
+            add_url = self._api_url("addClient")
+            response = self.session.post(add_url, json=payload, timeout=20)
+
+            logger.info("addClient status=%s", response.status_code)
+
+            if response.status_code != 200:
+                logger.error("Ошибка addClient: HTTP %s", response.status_code)
+                logger.error("Response text: %s", response.text)
+                return None
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("Ошибка addClient: %s", data.get("msg"))
+                return None
+
+            subscription_link = self.build_vless_link(client_uuid)
+            return client_uuid, xui_email, subscription_link
+
+        except Exception as e:
+            logger.exception("Ошибка создания клиента в 3x-ui: %s", e)
+            return None
+
+    def update_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+        enable: bool | None = None,
+        expiry_time_ms: int | None = None,
+        total_gb: int | None = None,
+    ) -> bool:
+        found = self.find_client(email=email, client_uuid=client_uuid)
+        if not found:
+            logger.error("Клиент в 3x-ui не найден email=%s uuid=%s", email, client_uuid)
+            return False
+
+        inbound_id, _, clients = found
+        updated = False
+
+        for item in clients:
+            is_match = False
+            if email and item.get("email") == email:
+                is_match = True
+            if client_uuid and item.get("id") == client_uuid:
+                is_match = True
+
+            if is_match:
+                if enable is not None:
+                    item["enable"] = enable
+                if expiry_time_ms is not None:
+                    item["expiryTime"] = expiry_time_ms
+                if total_gb is not None:
+                    item["totalGB"] = total_gb * 1024 * 1024 * 1024
+                updated = True
+                break
+
+        if not updated:
+            logger.error("Совпадающий клиент для update не найден email=%s uuid=%s", email, client_uuid)
+            return False
+
+        return self._save_clients_to_inbound(inbound_id, clients)
+
+    def disable_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> bool:
+        return self.update_client(
+            email=email,
+            client_uuid=client_uuid,
+            enable=False,
+        )
+
+    def enable_client(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+        expiry_time_ms: int | None = None,
+        total_gb: int | None = None,
+    ) -> bool:
+        return self.update_client(
+            email=email,
+            client_uuid=client_uuid,
+            enable=True,
+            expiry_time_ms=expiry_time_ms,
+            total_gb=total_gb,
+        )
+
+    def get_client_link(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+    ) -> Optional[str]:
+        found = self.find_client(email=email, client_uuid=client_uuid)
+        if not found:
+            return None
+
+        _, client_obj, _ = found
+        uuid_value = client_obj.get("id")
+        if not uuid_value:
+            return None
+
+        return self.build_vless_link(uuid_value)
+
+    def ensure_client_active(
+        self,
+        *,
+        email: str | None = None,
+        client_uuid: str | None = None,
+        expiry_time_ms: int | None = None,
+        total_gb: int | None = None,
+    ) -> bool:
+        return self.enable_client(
+            email=email,
+            client_uuid=client_uuid,
+            expiry_time_ms=expiry_time_ms,
+            total_gb=total_gb,
+        )
