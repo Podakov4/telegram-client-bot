@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config import APP_BASE_URL
 from database.db import AsyncSessionLocal
 from database.models import Client
-from services.vless import VLESSManager
 
 logger = logging.getLogger(__name__)
 
