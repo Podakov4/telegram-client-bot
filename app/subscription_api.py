@@ -4,6 +4,7 @@ from typing import Optional
 
 from aiogram import Bot
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +29,29 @@ from services.subscriptions import (
 )
 
 app = FastAPI(title="Freeth API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:36523",
+        "http://127.0.0.1:36523",
+        "http://localhost:36524",
+        "http://127.0.0.1:36524",
+        "http://localhost:45451",
+        "http://127.0.0.1:45451",
+        "http://localhost:35623",
+        "http://127.0.0.1:35623",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # =========================
