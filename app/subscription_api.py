@@ -32,22 +32,7 @@ app = FastAPI(title="Freeth API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5000",
-        "http://127.0.0.1:5000",
-        "http://localhost:8080",
-        "http://127.0.0.1:8080",
-        "http://localhost:36523",
-        "http://127.0.0.1:36523",
-        "http://localhost:36524",
-        "http://127.0.0.1:36524",
-        "http://localhost:45451",
-        "http://127.0.0.1:45451",
-        "http://localhost:35623",
-        "http://127.0.0.1:35623",
-    ],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
