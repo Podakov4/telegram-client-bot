@@ -57,6 +57,9 @@ class LoginByCodePayload(BaseModel):
     app_version: Optional[str] = Field(default=None, max_length=64)
     os_version: Optional[str] = Field(default=None, max_length=64)
 
+class UpdateProfilePayload(BaseModel):
+    email: Optional[str] = Field(default=None, max_length=255)
+
 
 class RefreshPayload(BaseModel):
     refresh_token: str
@@ -326,6 +329,26 @@ async def get_me(
         "client": serialize_client_profile(current_client),
     }
 
+@app.patch("/me/profile")
+async def update_my_profile(
+    payload: UpdateProfilePayload,
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
+):
+    email = (payload.email or "").strip()
+
+    if email == "":
+        current_client.email = None
+    else:
+        current_client.email = email.lower()
+
+    await db.commit()
+    await db.refresh(current_client)
+
+    return {
+        "ok": True,
+        "client": serialize_client_profile(current_client),
+    }
 
 @app.get("/me/subscription")
 async def get_my_subscription(
@@ -373,6 +396,7 @@ async def get_my_devices(
             "active_devices": limit_info.active_devices,
             "can_add_more": limit_info.can_add_more,
         },
+        "current_device_id": current_device.id,
     }
 
 
