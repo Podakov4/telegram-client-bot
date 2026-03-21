@@ -22,7 +22,7 @@ from services.auth_service import (
 )
 from services.client_access import get_client_vpn_access_by_client_id
 from services.device_service import DeviceNotFoundError, DeviceService
-from services.payments import process_successful_payment
+from services.payments import create_checkout_payment, process_successful_payment
 from services.subscriptions import (
     get_client_subscription_status,
     serialize_subscription_status,
@@ -72,6 +72,10 @@ class LogoutPayload(BaseModel):
 
 class RevokeDevicePayload(BaseModel):
     device_id: int
+
+
+class SubscriptionCheckoutPayload(BaseModel):
+    months: int = Field(..., ge=1, le=12)
 
 
 # =========================
@@ -366,6 +370,24 @@ async def get_my_subscription(
     return {
         "ok": True,
         "subscription": serialize_subscription_status(status_obj),
+    }
+
+
+@app.post("/me/subscription/checkout")
+async def create_my_subscription_checkout(
+    payload: SubscriptionCheckoutPayload,
+    current_client: Client = Depends(get_current_client),
+):
+    payment_id, payment_url = await create_checkout_payment(
+        telegram_id=current_client.telegram_id,
+        full_name=current_client.full_name,
+        months=payload.months,
+    )
+
+    return {
+        "ok": True,
+        "payment_id": payment_id,
+        "payment_url": payment_url,
     }
 
 
