@@ -228,6 +228,7 @@ async def create_checkout_payment(telegram_id: str, full_name: str | None, month
 
     payment_id = payment["id"]
     confirmation_url = payment["confirmation"]["confirmation_url"]
+    print("YooKassa confirmation_url:", confirmation_url)
     status_value = payment["status"]
 
     async with AsyncSessionLocal() as session:
