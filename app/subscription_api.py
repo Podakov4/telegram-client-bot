@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Optional
 
 from aiogram import Bot
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,10 +43,23 @@ app.add_middleware(
 # Pydantic schemas
 # =========================
 
-class RequestCodePayload(BaseModel):
-    telegram_id: str
-    platform: Optional[str] = "any"
-    device_uid: Optional[str] = None
+class RequestEmailCodePayload(BaseModel):
+    email: EmailStr
+
+
+class VerifyEmailCodePayload(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
+    device_uid: str = Field(..., min_length=3, max_length=255)
+    platform: str = Field(..., min_length=2, max_length=32)
+    device_name: Optional[str] = Field(default=None, max_length=255)
+    app_version: Optional[str] = Field(default=None, max_length=64)
+    os_version: Optional[str] = Field(default=None, max_length=64)
+
+
+class VerifyEmailCodePayload(BaseModel):
+    email: EmailStr
+    code: str = Field(..., min_length=6, max_length=6)
 
 
 class LoginByCodePayload(BaseModel):
@@ -237,6 +250,69 @@ async def request_code(
             "expires_at": login_code.expires_at.isoformat(),
             "platform": login_code.platform,
         }
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/app/auth/request-email-code")
+async def request_email_code(
+    payload: RequestEmailCodePayload,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await AuthService.request_email_code(
+            db=db,
+            email=str(payload.email).strip().lower(),
+        )
+
+        background_tasks.add_task(
+            AuthService.send_email_login_code,
+            email=result.email,
+            code=result.code,
+        )
+
+        return {
+            "ok": True,
+            "cooldown_seconds": result.cooldown_seconds,
+            "expires_at": result.expires_at.isoformat(),
+        }
+    except AuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/app/auth/verify-email-code")
+async def verify_email_code(
+    payload: VerifyEmailCodePayload,
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        result = await AuthService.login_by_email_code(
+            db=db,
+            email=str(payload.email).strip().lower(),
+            code=payload.code.strip(),
+            device_uid=payload.device_uid,
+            platform=payload.platform,
+            device_name=payload.device_name,
+            app_version=payload.app_version,
+            os_version=payload.os_version,
+        )
+
+        return {
+            "ok": True,
+            "tokens": {
+                "access_token": result.tokens.access_token,
+                "refresh_token": result.tokens.refresh_token,
+                "token_type": result.tokens.token_type,
+                "expires_in": result.tokens.expires_in,
+            },
+            "client": serialize_client_profile(result.client),
+            "device": DeviceService.serialize_device(result.device),
+        }
+    except ExpiredLoginCodeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except InvalidLoginCodeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except AuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

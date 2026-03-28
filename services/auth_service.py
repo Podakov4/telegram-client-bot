@@ -11,11 +11,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import SECRET_KEY
-from database.models import AppSession, Client, Device, LoginCode
+from database.models import AppSession, Client, Device, EmailLoginCode, LoginCode
 
 ACCESS_TOKEN_TTL_MINUTES = 30
 REFRESH_TOKEN_TTL_DAYS = 30
 LOGIN_CODE_TTL_MINUTES = 5
+EMAIL_LOGIN_CODE_TTL_MINUTES = 10
+EMAIL_LOGIN_CODE_COOLDOWN_SECONDS = 60
 JWT_ALGORITHM = "HS256"
 
 
@@ -32,6 +34,14 @@ class LoginResult:
     client: Client
     device: Device
     tokens: AuthTokens
+
+
+@dataclass
+class RequestEmailCodeResult:
+    email: str
+    code: str
+    expires_at: datetime
+    cooldown_seconds: int
 
 
 class AuthError(Exception):
@@ -65,12 +75,27 @@ class AuthService:
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
     @staticmethod
+    def _generate_email_code() -> str:
+        return f"{secrets.randbelow(1000000):06d}"
+
+    @staticmethod
     def _generate_token() -> str:
         return secrets.token_urlsafe(48)
 
     @staticmethod
     def _hash_token(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _normalize_email(email: str) -> str:
+        return email.strip().lower()
+
+    @staticmethod
+    def _build_email_identity(email: str) -> tuple[str, str]:
+        digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
+        telegram_id = f"email:{digest[:24]}"
+        login = f"email_{digest[:12]}"
+        return telegram_id, login
 
     @staticmethod
     def _build_access_token(client: Client, device: Device) -> tuple[str, int]:
@@ -119,7 +144,6 @@ class AuthService:
 
         now = AuthService._utcnow()
 
-        # Optional cleanup of old unused codes for this client
         await db.execute(
             update(LoginCode)
             .where(
@@ -142,6 +166,161 @@ class AuthService:
         await db.commit()
         await db.refresh(login_code)
         return login_code
+
+    @staticmethod
+    async def request_email_code(
+        db: AsyncSession,
+        email: str,
+    ) -> RequestEmailCodeResult:
+        normalized = AuthService._normalize_email(email)
+        now = AuthService._utcnow()
+
+        recent_result = await db.execute(
+            select(EmailLoginCode)
+            .where(
+                EmailLoginCode.email == normalized,
+                EmailLoginCode.created_at >= now - timedelta(seconds=EMAIL_LOGIN_CODE_COOLDOWN_SECONDS),
+            )
+            .order_by(EmailLoginCode.id.desc())
+        )
+        recent = recent_result.scalar_one_or_none()
+        if recent:
+            raise AuthError("Код уже отправлен. Попробуйте чуть позже.")
+
+        client_result = await db.execute(
+            select(Client).where(Client.email == normalized)
+        )
+        client = client_result.scalar_one_or_none()
+
+        code = AuthService._generate_email_code()
+        row = EmailLoginCode(
+            client_id=client.id if client else None,
+            email=normalized,
+            code_hash=AuthService._hash_token(code),
+            expires_at=now + timedelta(minutes=EMAIL_LOGIN_CODE_TTL_MINUTES),
+            attempts=0,
+        )
+        db.add(row)
+        await db.commit()
+
+        return RequestEmailCodeResult(
+            email=normalized,
+            code=code,
+            expires_at=row.expires_at,
+            cooldown_seconds=EMAIL_LOGIN_CODE_COOLDOWN_SECONDS,
+        )
+
+    @staticmethod
+    async def send_email_login_code(email: str, code: str) -> None:
+        # Временная заглушка. Здесь подключишь SMTP / Brevo / Mailgun / SendGrid.
+        print(f"[email-auth] send code {code} to {email}")
+
+    @staticmethod
+    async def _get_or_create_client_by_email(
+        db: AsyncSession,
+        email: str,
+    ) -> Client:
+        normalized = AuthService._normalize_email(email)
+
+        result = await db.execute(
+            select(Client).where(Client.email == normalized)
+        )
+        client = result.scalar_one_or_none()
+        if client:
+            return client
+
+        synthetic_telegram_id, synthetic_login = AuthService._build_email_identity(normalized)
+
+        client = Client(
+            telegram_id=synthetic_telegram_id,
+            full_name=normalized.split("@")[0],
+            login=synthetic_login,
+            email=normalized,
+            status="active",
+            created_via="email",
+            default_language="ru",
+            is_active=True,
+            is_paid=False,
+        )
+        db.add(client)
+        await db.commit()
+        await db.refresh(client)
+        return client
+
+    @staticmethod
+    async def login_by_email_code(
+        db: AsyncSession,
+        email: str,
+        code: str,
+        device_uid: str,
+        platform: str,
+        device_name: Optional[str] = None,
+        app_version: Optional[str] = None,
+        os_version: Optional[str] = None,
+    ) -> LoginResult:
+        normalized = AuthService._normalize_email(email)
+        now = AuthService._utcnow()
+
+        result = await db.execute(
+            select(EmailLoginCode)
+            .where(
+                EmailLoginCode.email == normalized,
+                EmailLoginCode.consumed_at.is_(None),
+            )
+            .order_by(EmailLoginCode.id.desc())
+        )
+        login_row = result.scalar_one_or_none()
+
+        if not login_row:
+            raise InvalidLoginCodeError("Login code not found")
+
+        if login_row.expires_at < now:
+            raise ExpiredLoginCodeError("Login code expired")
+
+        expected_hash = AuthService._hash_token(code.strip())
+        if login_row.code_hash != expected_hash:
+            login_row.attempts += 1
+            await db.commit()
+            raise InvalidLoginCodeError("Invalid login code")
+
+        client = await AuthService._get_or_create_client_by_email(
+            db=db,
+            email=normalized,
+        )
+
+        if client.status != "active":
+            raise AuthError("Client is not active")
+
+        if client.email != normalized:
+            client.email = normalized
+
+        device = await AuthService._get_or_create_device(
+            db=db,
+            client=client,
+            device_uid=device_uid,
+            platform=platform,
+            device_name=device_name,
+            app_version=app_version,
+            os_version=os_version,
+        )
+
+        login_row.client_id = client.id
+        login_row.consumed_at = now
+        client.last_login_at = now
+
+        await db.commit()
+
+        tokens = await AuthService._create_session(
+            db=db,
+            client=client,
+            device=device,
+        )
+
+        return LoginResult(
+            client=client,
+            device=device,
+            tokens=tokens,
+        )
 
     @staticmethod
     async def _get_or_create_device(
