@@ -51,6 +51,16 @@ YOOKASSA_AMOUNT_1_MONTH = get_env("YOOKASSA_AMOUNT_1_MONTH", "199.00")
 YOOKASSA_AMOUNT_3_MONTHS = get_env("YOOKASSA_AMOUNT_3_MONTHS", "499.00")
 YOOKASSA_AMOUNT_12_MONTHS = get_env("YOOKASSA_AMOUNT_12_MONTHS", "1490.00")
 
+SMTP_ENABLED = os.getenv("SMTP_ENABLED", "false").lower() == "true"
+SMTP_HOST = os.getenv("SMTP_HOST", "")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "")
+SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Freeth")
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
+
 XRAY_INBOUND_PORT = get_env_int("XRAY_INBOUND_PORT", 10443)
 
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")

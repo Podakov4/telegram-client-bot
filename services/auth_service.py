@@ -9,6 +9,7 @@ from typing import Optional
 import jwt
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from services.email_sender import send_login_code_email
 
 from config import SECRET_KEY
 from database.models import AppSession, Client, Device, EmailLoginCode, LoginCode
@@ -217,7 +218,7 @@ class AuthService:
 
     @staticmethod
     async def send_email_login_code(email: str, code: str) -> None:
-        print(f"[email-auth] send code {code} to {email}")
+        send_login_code_email(email, code)
 
     @staticmethod
     async def _get_or_create_client_by_email(
