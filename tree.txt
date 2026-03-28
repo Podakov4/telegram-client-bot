@@ -1,0 +1,93 @@
+.
+├── app
+│   └── subscription_api.py
+├── bot.py
+├── config.py
+├── database
+│   ├── clients.db
+│   ├── db.py
+│   ├── .env
+│   ├── __init__.py
+│   ├── models.py
+│   └── __pycache__
+├── .env
+├── .git
+│   ├── branches
+│   ├── COMMIT_EDITMSG
+│   ├── config
+│   ├── description
+│   ├── FETCH_HEAD
+│   ├── HEAD
+│   ├── hooks
+│   ├── index
+│   ├── info
+│   ├── logs
+│   ├── objects
+│   ├── ORIG_HEAD
+│   └── refs
+├── .gitignore
+├── handlers
+│   ├── admin.py
+│   ├── client.py
+│   ├── common.py
+│   ├── documents.py
+│   ├── __init__.py
+│   ├── instructions.py
+│   ├── menu.py
+│   ├── news.py
+│   └── support.py
+├── .idea
+│   ├── .gitignore
+│   ├── inspectionProfiles
+│   ├── misc.xml
+│   ├── modules.xml
+│   ├── pythonProject.iml
+│   ├── vcs.xml
+│   └── workspace.xml
+├── keyboards
+│   ├── __init__.py
+│   └── reply.py
+├── logs
+│   ├── .gitkeep
+│   ├── .gitkeep.py
+│   └── .log
+├── __pycache__
+│   └── config.cpython-312.pyc
+├── README.md
+├── requirements.txt
+├── scripts
+│   ├── add_happ_subscription_fields.py
+│   ├── fill_happ_subscription_urls.py
+│   ├── __pycache__
+│   ├── rename_existing_clients.py
+│   ├── send_expiring_notifications.py
+│   └── update_subscription_links.py
+├── services
+│   ├── auth_service.py
+│   ├── client_access.py
+│   ├── device_service.py
+│   ├── __init__.py
+│   ├── payments.py
+│   ├── subscriptions.py
+│   ├── vless.py
+│   └── yookassa.py
+├── tests
+│   └── __init__.py
+├── tree.txt
+├── utils
+│   ├── .gitkeep.py
+│   └── __init__.py
+├── .venv
+│   ├── bin
+│   ├── .gitignore
+│   ├── include
+│   ├── lib
+│   └── pyvenv.cfg
+└── venv
+    ├── bin
+    ├── include
+    ├── lib
+    ├── lib64 -> lib
+    └── pyvenv.cfg
+
+31 directories, 60 files

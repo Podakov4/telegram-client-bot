@@ -26,7 +26,7 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-SERVER_DISPLAY_NAME = "Germany"
+SERVER_DISPLAY_NAME = "🇳🇱 Amsterdam"
 
 
 class VLESSManager:
