@@ -175,8 +175,9 @@ class AuthService:
                 EmailLoginCode.created_at >= now - timedelta(seconds=EMAIL_LOGIN_CODE_COOLDOWN_SECONDS),
             )
             .order_by(EmailLoginCode.id.desc())
+            .limit(1)
         )
-        recent = recent_result.scalar_one_or_none()
+        recent = recent_result.scalars().first()
         if recent:
             raise AuthError("Код уже отправлен. Попробуйте чуть позже.")
 
@@ -184,6 +185,16 @@ class AuthService:
             select(Client).where(Client.email == normalized)
         )
         client = client_result.scalar_one_or_none()
+
+        # Инвалидируем все старые неиспользованные коды этого email
+        await db.execute(
+            update(EmailLoginCode)
+            .where(
+                EmailLoginCode.email == normalized,
+                EmailLoginCode.consumed_at.is_(None),
+            )
+            .values(consumed_at=now)
+        )
 
         code = AuthService._generate_email_code()
         row = EmailLoginCode(
@@ -195,6 +206,7 @@ class AuthService:
         )
         db.add(row)
         await db.commit()
+        await db.refresh(row)
 
         return RequestEmailCodeResult(
             email=normalized,
@@ -205,7 +217,6 @@ class AuthService:
 
     @staticmethod
     async def send_email_login_code(email: str, code: str) -> None:
-        # Временная заглушка. Подключишь SMTP / Brevo / Mailgun / SendGrid.
         print(f"[email-auth] send code {code} to {email}")
 
     @staticmethod
@@ -261,13 +272,16 @@ class AuthService:
                 EmailLoginCode.consumed_at.is_(None),
             )
             .order_by(EmailLoginCode.id.desc())
+            .limit(1)
         )
-        login_row = result.scalar_one_or_none()
+        login_row = result.scalars().first()
 
         if not login_row:
             raise InvalidLoginCodeError("Login code not found")
 
         if login_row.expires_at < now:
+            login_row.consumed_at = now
+            await db.commit()
             raise ExpiredLoginCodeError("Login code expired")
 
         expected_hash = AuthService._hash_token(code.strip())
