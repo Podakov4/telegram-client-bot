@@ -13,8 +13,8 @@ from config import (
 from database.db import AsyncSessionLocal
 from database.models import Client, SubscriptionHistory, YooKassaPayment
 from services.client_access import (
-    create_vpn_access_for_client,
-    disable_vpn_access_for_client,
+    create_vpn_access_for_client_id,
+    disable_vpn_access_for_client_id,
 )
 from services.yookassa import (
     create_payment as yk_create_payment,
@@ -87,15 +87,31 @@ def upsert_note_value(notes: Optional[str], key: str, value: str) -> str:
     return dump_notes_from_dict(data)
 
 
-async def activate_subscription(
-    telegram_id: str,
+async def _get_client_by_id(client_id: int) -> Client | None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.id == client_id)
+        )
+        return result.scalar_one_or_none()
+
+
+async def _get_client_by_telegram_id(telegram_id: str) -> Client | None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.telegram_id == str(telegram_id))
+        )
+        return result.scalar_one_or_none()
+
+
+async def activate_subscription_by_client_id(
+    client_id: int,
     months: int,
     *,
     max_devices: Optional[int] = None,
 ) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
+            select(Client).where(Client.id == client_id)
         )
         client = result.scalar_one_or_none()
 
@@ -135,19 +151,35 @@ async def activate_subscription(
         session.add(history)
         await session.commit()
 
-    ok = await create_vpn_access_for_client(telegram_id)
+    ok = await create_vpn_access_for_client_id(client_id)
     return ok
 
 
-async def activate_trial_subscription(
+async def activate_subscription(
     telegram_id: str,
+    months: int,
+    *,
+    max_devices: Optional[int] = None,
+) -> bool:
+    client = await _get_client_by_telegram_id(telegram_id)
+    if client is None:
+        return False
+    return await activate_subscription_by_client_id(
+        client_id=client.id,
+        months=months,
+        max_devices=max_devices,
+    )
+
+
+async def activate_trial_subscription_by_client_id(
+    client_id: int,
     days: int = 7,
     *,
     max_devices: int = 1,
 ) -> tuple[bool, str]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
+            select(Client).where(Client.id == client_id)
         )
         client = result.scalar_one_or_none()
 
@@ -186,17 +218,34 @@ async def activate_trial_subscription(
         session.add(history)
         await session.commit()
 
-    ok = await create_vpn_access_for_client(telegram_id)
+    ok = await create_vpn_access_for_client_id(client_id)
     if not ok:
         return False, "Пробный период создан, но доступ не удалось подготовить."
 
     return True, "Пробный период активирован."
 
 
-async def deactivate_subscription(telegram_id: str) -> bool:
+async def activate_trial_subscription(
+    telegram_id: str,
+    days: int = 7,
+    *,
+    max_devices: int = 1,
+) -> tuple[bool, str]:
+    client = await _get_client_by_telegram_id(telegram_id)
+    if client is None:
+        return False, "Клиент не найден."
+
+    return await activate_trial_subscription_by_client_id(
+        client_id=client.id,
+        days=days,
+        max_devices=max_devices,
+    )
+
+
+async def deactivate_subscription_by_client_id(client_id: int) -> bool:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
+            select(Client).where(Client.id == client_id)
         )
         client = result.scalar_one_or_none()
 
@@ -209,20 +258,37 @@ async def deactivate_subscription(telegram_id: str) -> bool:
 
         await session.commit()
 
-    await disable_vpn_access_for_client(telegram_id)
+    await disable_vpn_access_for_client_id(client_id)
     return True
 
 
-async def create_checkout_payment(telegram_id: str, full_name: str | None, months: int):
+async def deactivate_subscription(telegram_id: str) -> bool:
+    client = await _get_client_by_telegram_id(telegram_id)
+    if client is None:
+        return False
+    return await deactivate_subscription_by_client_id(client.id)
+
+
+async def create_checkout_payment_for_client(
+    client_id: int,
+    full_name: str | None,
+    months: int,
+):
+    client = await _get_client_by_id(client_id)
+    if client is None:
+        raise ValueError("Client not found")
+
     amount = get_amount_by_months(months)
     description = build_payment_description(months)
     item_name = build_receipt_item_name(months)
+
+    payment_customer_ref = client.telegram_id or f"client:{client.id}"
 
     payment = await yk_create_payment(
         amount=amount,
         description=description,
         item_name=item_name,
-        telegram_id=telegram_id,
+        telegram_id=payment_customer_ref,
         months=months,
     )
 
@@ -234,7 +300,8 @@ async def create_checkout_payment(telegram_id: str, full_name: str | None, month
     async with AsyncSessionLocal() as session:
         row = YooKassaPayment(
             external_payment_id=payment_id,
-            telegram_id=telegram_id,
+            client_id=client.id,
+            telegram_id=client.telegram_id,
             months=months,
             amount=amount,
             status=status_value,
@@ -244,6 +311,18 @@ async def create_checkout_payment(telegram_id: str, full_name: str | None, month
         await session.commit()
 
     return payment_id, confirmation_url
+
+
+async def create_checkout_payment(telegram_id: str, full_name: str | None, months: int):
+    client = await _get_client_by_telegram_id(telegram_id)
+    if client is None:
+        raise ValueError("Client not found")
+
+    return await create_checkout_payment_for_client(
+        client_id=client.id,
+        full_name=full_name,
+        months=months,
+    )
 
 
 async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
@@ -261,10 +340,19 @@ async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
         if row.is_processed:
             return True, "Этот платеж уже был обработан раньше."
 
-        ok = await activate_subscription(
-            telegram_id=row.telegram_id,
-            months=row.months,
-        )
+        if row.client_id is not None:
+            ok = await activate_subscription_by_client_id(
+                client_id=row.client_id,
+                months=row.months,
+            )
+        elif row.telegram_id:
+            ok = await activate_subscription(
+                telegram_id=row.telegram_id,
+                months=row.months,
+            )
+        else:
+            ok = False
+
         if not ok:
             return False, "Оплата прошла, но не удалось активировать подписку."
 
@@ -277,12 +365,15 @@ async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
         return True, "Оплата подтверждена, подписка активирована."
 
 
-async def confirm_checkout_payment(telegram_id: str, payment_id: str) -> tuple[bool, str]:
+async def confirm_checkout_payment_for_client(
+    client_id: int,
+    payment_id: str,
+) -> tuple[bool, str]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(YooKassaPayment).where(
                 YooKassaPayment.external_payment_id == payment_id,
-                YooKassaPayment.telegram_id == str(telegram_id),
+                YooKassaPayment.client_id == client_id,
             )
         )
         row = result.scalar_one_or_none()
@@ -302,3 +393,14 @@ async def confirm_checkout_payment(telegram_id: str, payment_id: str) -> tuple[b
             return False, f"Текущий статус платежа: {payment.get('status', 'unknown')}"
 
     return await process_successful_payment(payment_id)
+
+
+async def confirm_checkout_payment(telegram_id: str, payment_id: str) -> tuple[bool, str]:
+    client = await _get_client_by_telegram_id(telegram_id)
+    if client is None:
+        return False, "Платеж не найден."
+
+    return await confirm_checkout_payment_for_client(
+        client_id=client.id,
+        payment_id=payment_id,
+    )

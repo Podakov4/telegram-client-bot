@@ -22,7 +22,7 @@ from services.auth_service import (
 )
 from services.client_access import get_client_vpn_access_by_client_id
 from services.device_service import DeviceNotFoundError, DeviceService
-from services.payments import create_checkout_payment, process_successful_payment
+from services.payments import create_checkout_payment_for_client, process_successful_payment
 from services.subscriptions import (
     get_client_subscription_status,
     serialize_subscription_status,
@@ -43,6 +43,12 @@ app.add_middleware(
 # Pydantic schemas
 # =========================
 
+class RequestCodePayload(BaseModel):
+    telegram_id: str
+    platform: Optional[str] = "any"
+    device_uid: Optional[str] = None
+
+
 class RequestEmailCodePayload(BaseModel):
     email: EmailStr
 
@@ -55,11 +61,6 @@ class VerifyEmailCodePayload(BaseModel):
     device_name: Optional[str] = Field(default=None, max_length=255)
     app_version: Optional[str] = Field(default=None, max_length=64)
     os_version: Optional[str] = Field(default=None, max_length=64)
-
-
-class VerifyEmailCodePayload(BaseModel):
-    email: EmailStr
-    code: str = Field(..., min_length=6, max_length=6)
 
 
 class LoginByCodePayload(BaseModel):
@@ -125,9 +126,13 @@ def extract_bearer_token(authorization: Optional[str]) -> str:
     return token
 
 
+def is_numeric_telegram_id(value: Optional[str]) -> bool:
+    return bool(value) and str(value).isdigit()
+
+
 async def get_current_client(
-        authorization: Optional[str] = Header(default=None),
-        db: AsyncSession = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
 ) -> Client:
     token = extract_bearer_token(authorization)
 
@@ -149,8 +154,8 @@ async def get_current_client(
 
 
 async def get_current_device(
-        authorization: Optional[str] = Header(default=None),
-        db: AsyncSession = Depends(get_db),
+    authorization: Optional[str] = Header(default=None),
+    db: AsyncSession = Depends(get_db),
 ):
     token = extract_bearer_token(authorization)
 
@@ -234,8 +239,8 @@ async def get_subscription(token: str):
 
 @app.post("/app/auth/request-code")
 async def request_code(
-        payload: RequestCodePayload,
-        db: AsyncSession = Depends(get_db),
+    payload: RequestCodePayload,
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         login_code = await AuthService.create_login_code(
@@ -319,8 +324,8 @@ async def verify_email_code(
 
 @app.post("/app/auth/login-by-code")
 async def login_by_code(
-        payload: LoginByCodePayload,
-        db: AsyncSession = Depends(get_db),
+    payload: LoginByCodePayload,
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         result = await AuthService.login_by_code(
@@ -354,8 +359,8 @@ async def login_by_code(
 
 @app.post("/app/auth/refresh")
 async def refresh_token(
-        payload: RefreshPayload,
-        db: AsyncSession = Depends(get_db),
+    payload: RefreshPayload,
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         tokens = await AuthService.refresh_tokens(
@@ -375,8 +380,8 @@ async def refresh_token(
 
 @app.post("/app/auth/logout")
 async def logout(
-        payload: LogoutPayload,
-        db: AsyncSession = Depends(get_db),
+    payload: LogoutPayload,
+    db: AsyncSession = Depends(get_db),
 ):
     ok = await AuthService.logout(
         db=db,
@@ -387,8 +392,8 @@ async def logout(
 
 @app.post("/app/auth/logout-all")
 async def logout_all(
-        current_client: Client = Depends(get_current_client),
-        db: AsyncSession = Depends(get_db),
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
 ):
     revoked = await AuthService.logout_all_for_client(
         db=db,
@@ -403,7 +408,7 @@ async def logout_all(
 
 @app.get("/me")
 async def get_me(
-        current_client: Client = Depends(get_current_client),
+    current_client: Client = Depends(get_current_client),
 ):
     return {
         "ok": True,
@@ -413,9 +418,9 @@ async def get_me(
 
 @app.patch("/me/profile")
 async def update_my_profile(
-        payload: UpdateProfilePayload,
-        current_client: Client = Depends(get_current_client),
-        db: AsyncSession = Depends(get_db),
+    payload: UpdateProfilePayload,
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
 ):
     email = (payload.email or "").strip()
 
@@ -435,8 +440,8 @@ async def update_my_profile(
 
 @app.get("/me/subscription")
 async def get_my_subscription(
-        current_client: Client = Depends(get_current_client),
-        db: AsyncSession = Depends(get_db),
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
 ):
     status_obj = await get_client_subscription_status(
         client=current_client,
@@ -454,9 +459,9 @@ async def create_my_subscription_checkout(
     payload: SubscriptionCheckoutPayload,
     current_client: Client = Depends(get_current_client),
 ):
-    payment_id, payment_url = await create_checkout_payment(
-        telegram_id=current_client.telegram_id,
-        full_name=current_client.full_name,
+    payment_id, payment_url = await create_checkout_payment_for_client(
+        client_id=current_client.id,
+        full_name=current_client.full_name or current_client.email,
         months=payload.months,
     )
 
@@ -469,9 +474,9 @@ async def create_my_subscription_checkout(
 
 @app.get("/me/devices")
 async def get_my_devices(
-        current_client: Client = Depends(get_current_client),
-        current_device=Depends(get_current_device),
-        db: AsyncSession = Depends(get_db),
+    current_client: Client = Depends(get_current_client),
+    current_device=Depends(get_current_device),
+    db: AsyncSession = Depends(get_db),
 ):
     await DeviceService.touch_device(
         db=db,
@@ -503,9 +508,9 @@ async def get_my_devices(
 
 @app.post("/me/devices/revoke")
 async def revoke_my_device(
-        payload: RevokeDevicePayload,
-        current_client: Client = Depends(get_current_client),
-        db: AsyncSession = Depends(get_db),
+    payload: RevokeDevicePayload,
+    current_client: Client = Depends(get_current_client),
+    db: AsyncSession = Depends(get_db),
 ):
     try:
         device = await DeviceService.revoke_device(
@@ -527,7 +532,7 @@ async def revoke_my_device(
 
 @app.get("/vpn/access")
 async def get_vpn_access(
-        current_client: Client = Depends(get_current_client),
+    current_client: Client = Depends(get_current_client),
 ):
     access = await get_client_vpn_access_by_client_id(current_client.id)
 
@@ -542,7 +547,7 @@ async def get_vpn_access(
 
 @app.get("/vpn/subscription-url")
 async def get_vpn_subscription_url(
-        current_client: Client = Depends(get_current_client),
+    current_client: Client = Depends(get_current_client),
 ):
     access = await get_client_vpn_access_by_client_id(current_client.id)
 
@@ -586,7 +591,7 @@ async def yookassa_webhook(request: Request):
             )
             row = result.scalar_one_or_none()
 
-            if row:
+            if row and is_numeric_telegram_id(row.telegram_id):
                 bot = Bot(token=BOT_TOKEN)
                 try:
                     await bot.send_message(

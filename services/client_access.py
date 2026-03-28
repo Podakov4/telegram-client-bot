@@ -21,12 +21,17 @@ class ClientAccessError(Exception):
     pass
 
 
-def make_xui_email(telegram_id: str, full_name: str | None, fallback_id: int) -> str:
-    base_name = (full_name or f"user_{fallback_id}").lower().strip()
+def make_xui_email(client: Client) -> str:
+    raw_name = client.full_name or (client.email.split("@")[0] if client.email else f"user_{client.id}")
+    base_name = raw_name.lower().strip()
     base_name = base_name.replace(" ", "_")
     base_name = re.sub(r"[^a-zA-Z0-9_а-яА-ЯёЁ]", "", base_name)
-    base_name = base_name[:24] if base_name else f"user_{fallback_id}"
-    return f"tg_{telegram_id}_{base_name}"
+    base_name = base_name[:24] if base_name else f"user_{client.id}"
+
+    identity = client.telegram_id or (client.public_id[:10] if client.public_id else f"id{client.id}")
+    identity = re.sub(r"[^a-zA-Z0-9_]", "", identity)
+
+    return f"cl_{identity}_{base_name}"
 
 
 def generate_happ_subscription_token() -> str:
@@ -129,9 +134,6 @@ async def _update_existing_client_access(
     session: AsyncSession,
     client: Client,
 ) -> bool:
-    """
-    Если клиент уже существует в 3x-ui, синхронизируем срок действия и включаем его.
-    """
     if not client.paid_until:
         logger.warning("Cannot update access: paid_until is empty for client_id=%s", client.id)
         return False
@@ -149,7 +151,6 @@ async def _update_existing_client_access(
                 total_gb=0,
             )
     except TypeError:
-        # На случай, если сигнатура enable_client чуть отличается в текущем файле vless.py
         logger.exception("enable_client signature mismatch")
         updated = False
     except Exception:
@@ -166,53 +167,47 @@ async def _update_existing_client_access(
     return False
 
 
-async def create_vpn_access_for_client(telegram_id: str) -> bool:
-    logger.info("create_vpn_access_for_client start telegram_id=%s", telegram_id)
+async def create_vpn_access_for_client_id(client_id: int) -> bool:
+    logger.info("create_vpn_access_for_client_id start client_id=%s", client_id)
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
+            select(Client).where(Client.id == client_id)
         )
         client = result.scalar_one_or_none()
 
         if client is None:
-            logger.warning("Client not found for telegram_id=%s", telegram_id)
+            logger.warning("Client not found for client_id=%s", client_id)
             return False
 
         if not client.paid_until:
-            logger.warning("paid_until is empty for telegram_id=%s", telegram_id)
+            logger.warning("paid_until is empty for client_id=%s", client_id)
             return False
 
         ensure_happ_subscription_for_client(client)
 
         if client.xui_uuid and client.subscription_link:
-            logger.info(
-                "Client already has access, syncing expiry telegram_id=%s",
-                telegram_id,
-            )
+            logger.info("Client already has access, syncing expiry client_id=%s", client_id)
             synced = await _update_existing_client_access(session, client)
             if synced:
                 return True
 
-        xui_email = client.login or make_xui_email(
-            telegram_id=client.telegram_id,
-            full_name=client.full_name,
-            fallback_id=client.id,
-        )
+        xui_email = client.login or make_xui_email(client)
+        external_identity = client.telegram_id or f"client_{client.id}"
 
         manager = VLESSManager()
         paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
 
         created = manager.add_client(
-            telegram_id=client.telegram_id,
-            full_name=client.full_name or xui_email,
+            telegram_id=external_identity,
+            full_name=client.full_name or client.email or xui_email,
             xui_email=xui_email,
             paid_until_ts_ms=paid_until_ts_ms,
             total_gb=0,
         )
 
         if not created:
-            logger.error("Failed to create client access for telegram_id=%s", telegram_id)
+            logger.error("Failed to create client access for client_id=%s", client_id)
             return False
 
         xui_uuid, xui_email, subscription_link = created
@@ -227,7 +222,17 @@ async def create_vpn_access_for_client(telegram_id: str) -> bool:
         return True
 
 
-async def create_vpn_access_for_client_id(client_id: int) -> bool:
+async def create_vpn_access_for_client(telegram_id: str) -> bool:
+    client = await get_client_by_telegram_id(telegram_id)
+    if not client:
+        logger.warning("Client not found for telegram_id=%s", telegram_id)
+        return False
+    return await create_vpn_access_for_client_id(client.id)
+
+
+async def disable_vpn_access_for_client_id(client_id: int) -> bool:
+    logger.info("disable_vpn_access_for_client_id start client_id=%s", client_id)
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(Client).where(Client.id == client_id)
@@ -238,24 +243,8 @@ async def create_vpn_access_for_client_id(client_id: int) -> bool:
             logger.warning("Client not found for client_id=%s", client_id)
             return False
 
-        return await create_vpn_access_for_client(client.telegram_id)
-
-
-async def disable_vpn_access_for_client(telegram_id: str) -> bool:
-    logger.info("disable_vpn_access_for_client start telegram_id=%s", telegram_id)
-
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            logger.warning("Client not found for telegram_id=%s", telegram_id)
-            return False
-
         if not client.xui_email and not client.xui_uuid:
-            logger.info("Client has no xray access telegram_id=%s", telegram_id)
+            logger.info("Client has no xray access client_id=%s", client_id)
             return True
 
         manager = VLESSManager()
@@ -270,7 +259,7 @@ async def disable_vpn_access_for_client(telegram_id: str) -> bool:
             logger.exception("disable_client signature mismatch")
             disabled = False
         except Exception:
-            logger.exception("Failed to disable VPN access for telegram_id=%s", telegram_id)
+            logger.exception("Failed to disable VPN access for client_id=%s", client_id)
             disabled = False
 
         if disabled:
@@ -281,31 +270,27 @@ async def disable_vpn_access_for_client(telegram_id: str) -> bool:
         return False
 
 
-async def disable_vpn_access_for_client_id(client_id: int) -> bool:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
-        client = result.scalar_one_or_none()
-
-        if client is None:
-            logger.warning("Client not found for client_id=%s", client_id)
-            return False
-
-        return await disable_vpn_access_for_client(client.telegram_id)
-
-
-async def sync_vpn_access_for_client(telegram_id: str) -> bool:
-    """
-    Синхронизирует доступ с текущим состоянием подписки:
-    - если подписка активна -> создаём/обновляем доступ
-    - если подписка истекла -> отключаем доступ
-    """
+async def disable_vpn_access_for_client(telegram_id: str) -> bool:
     client = await get_client_by_telegram_id(telegram_id)
+    if not client:
+        logger.warning("Client not found for telegram_id=%s", telegram_id)
+        return False
+    return await disable_vpn_access_for_client_id(client.id)
+
+
+async def sync_vpn_access_for_client_id(client_id: int) -> bool:
+    client = await get_client_by_id(client_id)
     if not client:
         return False
 
     if is_client_subscription_active(client):
-        return await create_vpn_access_for_client(telegram_id)
+        return await create_vpn_access_for_client_id(client_id)
 
-    return await disable_vpn_access_for_client(telegram_id)
+    return await disable_vpn_access_for_client_id(client_id)
+
+
+async def sync_vpn_access_for_client(telegram_id: str) -> bool:
+    client = await get_client_by_telegram_id(telegram_id)
+    if not client:
+        return False
+    return await sync_vpn_access_for_client_id(client.id)

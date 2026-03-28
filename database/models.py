@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
 from sqlalchemy.orm import relationship
 
 from database.db import Base
@@ -16,17 +16,20 @@ class Client(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    telegram_id = Column(String, unique=True, nullable=False, index=True)
+    # Identity
+    telegram_id = Column(String, unique=True, nullable=True, index=True)
     full_name = Column(String, nullable=True)
     login = Column(String, unique=True, nullable=True)
 
+    # Cross-platform identity fields
     public_id = Column(String, unique=True, nullable=False, index=True, default=generate_public_id)
     email = Column(String, unique=True, nullable=True, index=True)
-    status = Column(String, nullable=False, default="active")
-    created_via = Column(String, nullable=False, default="telegram")
+    status = Column(String, nullable=False, default="active")  # active / blocked / deleted
+    created_via = Column(String, nullable=False, default="telegram")  # telegram / email / admin / etc.
     default_language = Column(String, nullable=True, default="ru")
     last_login_at = Column(DateTime, nullable=True)
 
+    # Existing Xray / VLESS fields
     xui_uuid = Column(String, unique=True, nullable=True)
     xui_email = Column(String, unique=True, nullable=True)
 
@@ -67,13 +70,13 @@ class Client(Base):
         back_populates="client",
         cascade="all, delete-orphan",
     )
-    app_sessions = relationship(
-        "AppSession",
+    email_login_codes = relationship(
+        "EmailLoginCode",
         back_populates="client",
         cascade="all, delete-orphan",
     )
-    email_login_codes = relationship(
-        "EmailLoginCode",
+    app_sessions = relationship(
+        "AppSession",
         back_populates="client",
         cascade="all, delete-orphan",
     )
@@ -109,7 +112,7 @@ class Device(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
 
     device_uid = Column(String, unique=True, nullable=False, index=True)
-    platform = Column(String, nullable=False, index=True)
+    platform = Column(String, nullable=False, index=True)  # android / ios / windows / macos / linux / web
     device_name = Column(String, nullable=True)
     app_version = Column(String, nullable=True)
     os_version = Column(String, nullable=True)
@@ -141,7 +144,7 @@ class LoginCode(Base):
     client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
 
     code = Column(String, unique=True, nullable=False, index=True)
-    platform = Column(String, nullable=True)
+    platform = Column(String, nullable=True)  # android / ios / windows / macos / any
     device_uid = Column(String, nullable=True)
 
     expires_at = Column(DateTime, nullable=False)
@@ -164,7 +167,7 @@ class EmailLoginCode(Base):
     consumed_at = Column(DateTime, nullable=True)
     attempts = Column(Integer, default=0, nullable=False)
 
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     client = relationship("Client", back_populates="email_login_codes")
 
@@ -210,7 +213,10 @@ class YooKassaPayment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     external_payment_id = Column(String, unique=True, nullable=False, index=True)
-    telegram_id = Column(String, nullable=False, index=True)
+
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
+    telegram_id = Column(String, nullable=True, index=True)
+
     months = Column(Integer, nullable=False)
     amount = Column(String, nullable=False)
 

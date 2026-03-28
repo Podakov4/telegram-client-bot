@@ -91,13 +91,6 @@ class AuthService:
         return email.strip().lower()
 
     @staticmethod
-    def _build_email_identity(email: str) -> tuple[str, str]:
-        digest = hashlib.sha256(email.encode("utf-8")).hexdigest()
-        telegram_id = f"email:{digest[:24]}"
-        login = f"email_{digest[:12]}"
-        return telegram_id, login
-
-    @staticmethod
     def _build_access_token(client: Client, device: Device) -> tuple[str, int]:
         now = AuthService._utcnow()
         expires_at = now + timedelta(minutes=ACCESS_TOKEN_TTL_MINUTES)
@@ -212,7 +205,7 @@ class AuthService:
 
     @staticmethod
     async def send_email_login_code(email: str, code: str) -> None:
-        # Временная заглушка. Здесь подключишь SMTP / Brevo / Mailgun / SendGrid.
+        # Временная заглушка. Подключишь SMTP / Brevo / Mailgun / SendGrid.
         print(f"[email-auth] send code {code} to {email}")
 
     @staticmethod
@@ -229,17 +222,17 @@ class AuthService:
         if client:
             return client
 
-        synthetic_telegram_id, synthetic_login = AuthService._build_email_identity(normalized)
+        local_part = normalized.split("@")[0][:64]
 
         client = Client(
-            telegram_id=synthetic_telegram_id,
-            full_name=normalized.split("@")[0],
-            login=synthetic_login,
+            telegram_id=None,
+            full_name=local_part,
+            login=None,
             email=normalized,
             status="active",
             created_via="email",
             default_language="ru",
-            is_active=True,
+            is_active=False,
             is_paid=False,
         )
         db.add(client)
