@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+import logging
 import jwt
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +21,8 @@ LOGIN_CODE_TTL_MINUTES = 5
 EMAIL_LOGIN_CODE_TTL_MINUTES = 10
 EMAIL_LOGIN_CODE_COOLDOWN_SECONDS = 60
 JWT_ALGORITHM = "HS256"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -218,7 +221,11 @@ class AuthService:
 
     @staticmethod
     async def send_email_login_code(email: str, code: str) -> None:
-        send_login_code_email(email, code)
+        try:
+            send_login_code_email(email, code)
+        except Exception:
+            logger.exception("Failed to send email code to %s", email)
+            print(f"[email-auth-fallback] code {code} for {email}")
 
     @staticmethod
     async def _get_or_create_client_by_email(

@@ -1,41 +1,37 @@
-import smtplib
-from email.message import EmailMessage
+import json
+import logging
+import urllib.error
+import urllib.request
 
 from config import (
-    SMTP_ENABLED,
-    SMTP_HOST,
-    SMTP_PORT,
-    SMTP_USERNAME,
-    SMTP_PASSWORD,
-    SMTP_FROM_EMAIL,
-    SMTP_FROM_NAME,
-    SMTP_USE_TLS,
-    SMTP_USE_SSL,
+    EMAIL_PROVIDER,
+    RESEND_API_KEY,
+    RESEND_ENABLED,
+    RESEND_FROM_EMAIL,
+    RESEND_FROM_NAME,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class EmailSenderError(Exception):
     pass
 
 
-def build_login_code_email(to_email: str, code: str) -> EmailMessage:
-    message = EmailMessage()
+def _build_subject() -> str:
+    return "Код входа в Freeth"
 
-    from_display = SMTP_FROM_EMAIL
-    if SMTP_FROM_NAME:
-        from_display = f"{SMTP_FROM_NAME} <{SMTP_FROM_EMAIL}>"
 
-    message["Subject"] = "Код входа в Freeth"
-    message["From"] = from_display
-    message["To"] = to_email
-
-    text_body = (
+def _build_text_body(code: str) -> str:
+    return (
         f"Ваш код входа в Freeth: {code}\n\n"
         "Код одноразовый. Никому его не передавайте.\n"
         "Если вы не запрашивали вход, просто проигнорируйте это письмо."
     )
 
-    html_body = f"""
+
+def _build_html_body(code: str) -> str:
+    return f"""
     <html>
       <body style="font-family: Arial, sans-serif; line-height: 1.5;">
         <h2>Вход в Freeth</h2>
@@ -47,36 +43,55 @@ def build_login_code_email(to_email: str, code: str) -> EmailMessage:
     </html>
     """
 
-    message.set_content(text_body)
-    message.add_alternative(html_body, subtype="html")
-    return message
 
+def _send_via_resend(to_email: str, code: str) -> None:
+    if not RESEND_ENABLED:
+        raise EmailSenderError("Resend is disabled")
 
-def send_email_message(message: EmailMessage) -> None:
-    if not SMTP_ENABLED:
-        raise EmailSenderError("SMTP is disabled")
+    if not RESEND_API_KEY:
+        raise EmailSenderError("RESEND_API_KEY is empty")
 
-    if not SMTP_HOST or not SMTP_PORT or not SMTP_FROM_EMAIL:
-        raise EmailSenderError("SMTP config is incomplete")
+    if not RESEND_FROM_EMAIL:
+        raise EmailSenderError("RESEND_FROM_EMAIL is empty")
+
+    from_value = RESEND_FROM_EMAIL
+    if RESEND_FROM_NAME:
+        from_value = f"{RESEND_FROM_NAME} <{RESEND_FROM_EMAIL}>"
+
+    payload = {
+        "from": from_value,
+        "to": [to_email],
+        "subject": _build_subject(),
+        "text": _build_text_body(code),
+        "html": _build_html_body(code),
+    }
+
+    req = urllib.request.Request(
+        url="https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {RESEND_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
 
     try:
-        if SMTP_USE_SSL:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-                if SMTP_USERNAME:
-                    server.login(SMTP_USERNAME, SMTP_PASSWORD or "")
-                server.send_message(message)
-            return
-
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            if SMTP_USE_TLS:
-                server.starttls()
-            if SMTP_USERNAME:
-                server.login(SMTP_USERNAME, SMTP_PASSWORD or "")
-            server.send_message(message)
+        with urllib.request.urlopen(req, timeout=20) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            logger.info("Resend send success: %s", body)
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise EmailSenderError(
+            f"Resend HTTP {exc.code}: {error_body}"
+        ) from exc
     except Exception as exc:
-        raise EmailSenderError(f"Failed to send email: {exc}") from exc
+        raise EmailSenderError(f"Resend request failed: {exc}") from exc
 
 
 def send_login_code_email(to_email: str, code: str) -> None:
-    message = build_login_code_email(to_email=to_email, code=code)
-    send_email_message(message)
+    if EMAIL_PROVIDER == "resend":
+        _send_via_resend(to_email=to_email, code=code)
+        return
+
+    raise EmailSenderError(f"Unsupported EMAIL_PROVIDER: {EMAIL_PROVIDER}")

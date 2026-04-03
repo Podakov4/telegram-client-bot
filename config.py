@@ -61,6 +61,13 @@ SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Freeth")
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "stub").lower()
+
+RESEND_ENABLED = os.getenv("RESEND_ENABLED", "false").lower() == "true"
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "")
+RESEND_FROM_NAME = os.getenv("RESEND_FROM_NAME", "Freeth")
+
 XRAY_INBOUND_PORT = get_env_int("XRAY_INBOUND_PORT", 10443)
 
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO")
