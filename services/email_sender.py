@@ -72,6 +72,7 @@ def _send_via_resend(to_email: str, code: str) -> None:
         headers={
             "Authorization": f"Bearer {RESEND_API_KEY}",
             "Content-Type": "application/json",
+            "User-Agent": "FreethBackend/1.0",
         },
         method="POST",
     )
