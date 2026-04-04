@@ -18,6 +18,12 @@ from services.subscriptions import get_expiring_clients, get_expired_clients
 
 router = Router()
 
+HAPP_SITE_URL = "https://www.happ.su/main/ru"
+HAPP_APPSTORE_URL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
+HAPP_GOOGLEPLAY_URL = "https://play.google.com/store/apps/details?id=com.happproxy"
+HAPP_DESKTOP_RELEASES_URL = "https://github.com/Happ-proxy/happ-desktop/releases"
+
+
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
@@ -43,15 +49,16 @@ def admin_client_actions_keyboard(client_id: int):
     builder.button(text="VLESS ссылка", callback_data=f"admin_vless:{client_id}")
     builder.button(text="QR", callback_data=f"admin_qr:{client_id}")
     builder.button(text="Все данные клиента", callback_data=f"admin_copy_all:{client_id}")
+    builder.button(text="Отправить доступ заново", callback_data=f"admin_resend_access:{client_id}")
+    builder.button(text="Отправить инструкции", callback_data=f"admin_send_instructions:{client_id}")
     builder.button(text="Продлить 1 месяц", callback_data=f"admin_extend_1:{client_id}")
     builder.button(text="Продлить 3 месяца", callback_data=f"admin_extend_3:{client_id}")
     builder.button(text="Продлить 12 месяцев", callback_data=f"admin_extend_12:{client_id}")
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(2, 2, 1, 1, 1, 1, 1)
+    builder.adjust(2, 2, 1, 1, 1, 1, 1, 1)
     return builder.as_markup()
-
 
 
 def admin_search_results_keyboard(clients: list[Client]):
@@ -75,6 +82,28 @@ def clients_list_keyboard(clients: list[Client]):
 def renewal_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Продлить подписку", callback_data="open_payment_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def client_access_actions_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
+    builder.button(text="Показать данные для подключения", callback_data="show_vless_link")
+    builder.button(text="Показать QR-код", callback_data="show_vless_qr")
+    builder.button(text="Войти в приложение", callback_data="open_app_login_menu")
+    builder.button(text="Мои устройства", callback_data="show_my_devices")
+    builder.button(text="Продлить подписку", callback_data="open_payment_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def client_instructions_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Happ для iPhone / iPad", url=HAPP_APPSTORE_URL)
+    builder.button(text="Happ для Android", url=HAPP_GOOGLEPLAY_URL)
+    builder.button(text="Happ для Windows / macOS", url=HAPP_DESKTOP_RELEASES_URL)
+    builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -105,7 +134,8 @@ def format_client_card(client: Client) -> str:
         f"Trial использован: {trial_used}\n"
         f"Активно до: {paid_until_text}\n"
         f"Осталось: {days_left_text}\n"
-        f"Ссылка: {'Есть' if client.subscription_link else 'Нет'}"
+        f"Ссылка VLESS: {'Есть' if client.subscription_link else 'Нет'}\n"
+        f"Happ ссылка: {'Есть' if client.happ_subscription_url else 'Нет'}"
     )
 
 
@@ -217,6 +247,65 @@ async def get_trial_clients(limit: int = 20):
         )
         clients = list(result.scalars().all())
         return [c for c in clients if c.notes and "trial_used=true" in c.notes]
+
+
+
+
+async def send_access_again_to_client(bot: Bot, client: Client) -> tuple[bool, str]:
+    if not client.telegram_id:
+        return False, "У клиента не указан Telegram ID."
+
+    if not client.subscription_link and not client.happ_subscription_url:
+        return False, "У клиента пока нет подготовленного доступа."
+
+    name = client.full_name or "пользователь"
+
+    text = (
+        f"Здравствуйте, {name}!\n\n"
+        "Мы отправили ваш доступ Freeth заново.\n\n"
+        "Выберите удобный вариант ниже:\n"
+        "• подключить в Happ\n"
+        "• посмотреть данные для подключения\n"
+        "• получить QR-код\n"
+        "• войти в приложение"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=int(client.telegram_id),
+            text=text,
+            reply_markup=client_access_actions_keyboard(),
+        )
+        return True, "ok"
+    except Exception as exc:
+        return False, str(exc)
+
+
+async def send_instructions_to_client(bot: Bot, client: Client) -> tuple[bool, str]:
+    if not client.telegram_id:
+        return False, "У клиента не указан Telegram ID."
+
+    name = client.full_name or "пользователь"
+
+    text = (
+        f"Здравствуйте, {name}!\n\n"
+        "Короткая инструкция по подключению Freeth:\n\n"
+        "1. Установите Happ на своё устройство\n"
+        "2. Откройте сообщение с доступом или раздел «Мой доступ» в боте\n"
+        "3. Используйте «Подключить в Happ», «Показать данные для подключения» или «Показать QR-код»\n"
+        "4. Импортируйте доступ в Happ и включите подключение\n\n"
+        "Ниже — ссылки на загрузку приложений Happ."
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=int(client.telegram_id),
+            text=text,
+            reply_markup=client_instructions_keyboard(),
+        )
+        return True, "ok"
+    except Exception as exc:
+        return False, str(exc)
 
 
 async def send_expiring_notice(bot: Bot, client: Client) -> bool:
@@ -665,6 +754,64 @@ async def cb_admin_copy_all(callback: CallbackQuery):
         parse_mode="HTML",
     )
     await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("admin_resend_access:"))
+async def cb_admin_resend_access(callback: CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    ok, details = await send_access_again_to_client(bot, client)
+    if not ok:
+        await callback.message.answer(
+            f"Не удалось отправить доступ заново.\n\nПричина: {details}"
+        )
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        f"Клиенту отправлен доступ заново: {client.full_name or 'Без имени'} "
+        f"(ID {client.id})."
+    )
+    await callback.answer("Отправлено")
+
+
+@router.callback_query(F.data.startswith("admin_send_instructions:"))
+async def cb_admin_send_instructions(callback: CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    ok, details = await send_instructions_to_client(bot, client)
+    if not ok:
+        await callback.message.answer(
+            f"Не удалось отправить инструкции.\n\nПричина: {details}"
+        )
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        f"Клиенту отправлены инструкции: {client.full_name or 'Без имени'} "
+        f"(ID {client.id})."
+    )
+    await callback.answer("Отправлено")
 
 
 @router.callback_query(F.data.startswith("admin_extend_"))
