@@ -20,7 +20,10 @@ from services.auth_service import (
     InvalidRefreshTokenError,
     RevokedSessionError,
 )
-from services.client_access import get_client_vpn_access_by_client_id
+from services.client_access import (
+    get_client_subscription_links_by_client_id,
+    get_client_vpn_access_by_client_id,
+)
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.payments import create_checkout_payment_for_client, process_successful_payment
 from services.subscriptions import (
@@ -96,10 +99,11 @@ class SubscriptionCheckoutPayload(BaseModel):
 # Helpers
 # =========================
 
-def build_happ_subscription_body(client: Client) -> str:
-    if not client.subscription_link:
+def build_happ_subscription_body(links: list[str]) -> str:
+    cleaned = [line.strip() for line in links if line and line.strip()]
+    if not cleaned:
         return ""
-    return client.subscription_link.strip() + "\n"
+    return "\n".join(cleaned) + "\n"
 
 
 def extract_bearer_token(authorization: Optional[str]) -> str:
@@ -216,10 +220,11 @@ async def get_subscription(token: str):
         if client is None:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
-        if not client.subscription_link:
+        links = await get_client_subscription_links_by_client_id(client.id)
+        if not links:
             raise HTTPException(status_code=404, detail="Access data not found")
 
-        body = build_happ_subscription_body(client)
+        body = build_happ_subscription_body(links)
 
         return Response(
             content=body,
@@ -559,6 +564,8 @@ async def get_vpn_subscription_url(
         "ok": True,
         "subscription_url": vpn.get("subscription_url"),
         "manual_url": vpn.get("manual_url"),
+        "manual_urls": vpn.get("manual_urls", []),
+        "servers": vpn.get("servers", []),
         "type": vpn.get("type"),
         "supports": vpn.get("supports", []),
     }

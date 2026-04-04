@@ -1,7 +1,16 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from database.db import Base
@@ -29,10 +38,10 @@ class Client(Base):
     default_language = Column(String, nullable=True, default="ru")
     last_login_at = Column(DateTime, nullable=True)
 
-    # Existing Xray / VLESS fields
+    # Legacy single-node fields kept for backward compatibility.
+    # Primary node values are mirrored here so old bot/app code keeps working.
     xui_uuid = Column(String, unique=True, nullable=True)
     xui_email = Column(String, unique=True, nullable=True)
-
     subscription_link = Column(Text, nullable=True)
 
     happ_subscription_token = Column(String, unique=True, nullable=True, index=True)
@@ -80,6 +89,78 @@ class Client(Base):
         back_populates="client",
         cascade="all, delete-orphan",
     )
+    vpn_accesses = relationship(
+        "ClientVpnAccess",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
+
+
+class VpnNode(Base):
+    __tablename__ = "vpn_nodes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, unique=True, nullable=False, index=True)  # nl / de
+    name = Column(String, nullable=False)
+    display_name = Column(String, nullable=False)
+    country_code = Column(String, nullable=True)
+
+    panel_url = Column(String, nullable=False)
+    panel_username = Column(String, nullable=False)
+    panel_password = Column(String, nullable=False)
+    web_base_path = Column(String, nullable=True)
+    inbound_port = Column(Integer, nullable=False)
+
+    vless_domain = Column(String, nullable=False)
+    vless_public_port = Column(Integer, nullable=False)
+    vless_path = Column(String, nullable=False)
+    vless_security = Column(String, nullable=False, default="tls")
+    vless_sni = Column(String, nullable=False)
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    client_accesses = relationship(
+        "ClientVpnAccess",
+        back_populates="node",
+        cascade="all, delete-orphan",
+    )
+
+
+class ClientVpnAccess(Base):
+    __tablename__ = "client_vpn_access"
+    __table_args__ = (
+        UniqueConstraint("client_id", "node_id", name="uq_client_vpn_access_client_node"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+    node_id = Column(Integer, ForeignKey("vpn_nodes.id"), nullable=False, index=True)
+
+    xui_uuid = Column(String, nullable=True, index=True)
+    xui_email = Column(String, nullable=True, index=True)
+    subscription_link = Column(Text, nullable=True)
+
+    is_enabled = Column(Boolean, default=True, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    client = relationship("Client", back_populates="vpn_accesses")
+    node = relationship("VpnNode", back_populates="client_accesses")
 
 
 class Plan(Base):

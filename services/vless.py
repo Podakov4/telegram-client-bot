@@ -6,22 +6,23 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote
 
 import requests
 
 from config import (
-    XUI_BASE_URL,
-    XUI_WEB_BASE_PATH,
-    XUI_USERNAME,
-    XUI_PASSWORD,
     VLESS_DOMAIN,
-    VLESS_PUBLIC_PORT,
     VLESS_PATH,
+    VLESS_PUBLIC_PORT,
     VLESS_SECURITY,
     VLESS_SNI,
     XRAY_INBOUND_PORT,
+    XUI_BASE_URL,
+    XUI_PASSWORD,
+    XUI_USERNAME,
+    XUI_WEB_BASE_PATH,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,21 +30,59 @@ logger = logging.getLogger(__name__)
 SERVER_DISPLAY_NAME = "🇳🇱 Amsterdam"
 
 
+@dataclass(slots=True)
+class NodeConfig:
+    code: str
+    name: str
+    display_name: str
+    panel_url: str
+    username: str
+    password: str
+    web_base_path: str = ""
+    inbound_port: int = XRAY_INBOUND_PORT
+    vless_domain: str = VLESS_DOMAIN
+    vless_public_port: int = VLESS_PUBLIC_PORT
+    vless_path: str = VLESS_PATH
+    vless_security: str = VLESS_SECURITY
+    vless_sni: str = VLESS_SNI
+
+
+DEFAULT_NODE_CONFIG = NodeConfig(
+    code="nl",
+    name="Netherlands",
+    display_name=SERVER_DISPLAY_NAME,
+    panel_url=XUI_BASE_URL,
+    username=XUI_USERNAME,
+    password=XUI_PASSWORD,
+    web_base_path=XUI_WEB_BASE_PATH,
+    inbound_port=XRAY_INBOUND_PORT,
+    vless_domain=VLESS_DOMAIN,
+    vless_public_port=VLESS_PUBLIC_PORT,
+    vless_path=VLESS_PATH,
+    vless_security=VLESS_SECURITY,
+    vless_sni=VLESS_SNI,
+)
+
+
 class VLESSManager:
     def __init__(
         self,
+        node_config: NodeConfig | None = None,
         panel_url: str | None = None,
         username: str | None = None,
         password: str | None = None,
     ):
-        self.panel_url = (panel_url or XUI_BASE_URL).rstrip("/")
-        self.username = username or XUI_USERNAME
-        self.password = password or XUI_PASSWORD
+        self.node_config = node_config or DEFAULT_NODE_CONFIG
+        self.panel_url = (panel_url or self.node_config.panel_url).rstrip("/")
+        self.username = username or self.node_config.username
+        self.password = password or self.node_config.password
+        self.web_base_path = (self.node_config.web_base_path or "").strip("/")
+        self.inbound_port = int(self.node_config.inbound_port)
         self.session = requests.Session()
 
     def _join_url(self, path: str) -> str:
         base = self.panel_url.rstrip("/")
-        prefix = f"/{XUI_WEB_BASE_PATH}" if XUI_WEB_BASE_PATH else ""
+        prefix = f"/{self.web_base_path}" if self.web_base_path else ""
         return f"{base}{prefix}{path}"
 
     def _api_url(self, path: str) -> str:
@@ -225,7 +264,7 @@ class VLESSManager:
         if not self.login():
             return None
 
-        inbound_id = self.find_inbound_by_port(XRAY_INBOUND_PORT)
+        inbound_id = self.find_inbound_by_port(self.inbound_port)
         if not inbound_id:
             return None
 
@@ -254,19 +293,19 @@ class VLESSManager:
     def build_vless_link(
         self,
         client_uuid: str,
-        title: str = SERVER_DISPLAY_NAME,
+        title: str | None = None,
     ) -> str:
-        path = VLESS_PATH if VLESS_PATH.startswith("/") else f"/{VLESS_PATH}"
-        title_encoded = quote(title, safe="")
+        path = self.node_config.vless_path if self.node_config.vless_path.startswith("/") else f"/{self.node_config.vless_path}"
+        title_encoded = quote(title or self.node_config.display_name, safe="")
 
         return (
-            f"vless://{client_uuid}@{VLESS_DOMAIN}:{VLESS_PUBLIC_PORT}"
+            f"vless://{client_uuid}@{self.node_config.vless_domain}:{self.node_config.vless_public_port}"
             f"?type=ws"
-            f"&security={VLESS_SECURITY}"
+            f"&security={self.node_config.vless_security}"
             f"&encryption=none"
             f"&path=%2F{path.lstrip('/')}"
-            f"&host={VLESS_DOMAIN}"
-            f"&sni={VLESS_SNI}"
+            f"&host={self.node_config.vless_domain}"
+            f"&sni={self.node_config.vless_sni}"
             f"#{title_encoded}"
         )
 
@@ -281,7 +320,7 @@ class VLESSManager:
         if not self.login():
             return None
 
-        inbound_id = self.find_inbound_by_port(XRAY_INBOUND_PORT)
+        inbound_id = self.find_inbound_by_port(self.inbound_port)
         if not inbound_id:
             return None
 

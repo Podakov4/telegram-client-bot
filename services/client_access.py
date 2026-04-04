@@ -7,14 +7,17 @@ import secrets
 from typing import Optional
 
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import APP_BASE_URL
 from database.db import AsyncSessionLocal
-from database.models import Client
-from services.vless import VLESSManager
+from database.models import Client, ClientVpnAccess, VpnNode
+from services.vless import DEFAULT_NODE_CONFIG, NodeConfig, VLESSManager
 
 logger = logging.getLogger(__name__)
+
+SUPPORTED_PLATFORMS = ["android", "ios", "windows", "macos"]
 
 
 class ClientAccessError(Exception):
@@ -61,8 +64,39 @@ def is_client_subscription_active(client: Client) -> bool:
     return client.paid_until > datetime.utcnow()
 
 
-def serialize_vpn_access(client: Client) -> dict:
+def build_node_config(node: VpnNode) -> NodeConfig:
+    return NodeConfig(
+        code=node.code,
+        name=node.name,
+        display_name=node.display_name,
+        panel_url=node.panel_url,
+        username=node.panel_username,
+        password=node.panel_password,
+        web_base_path=node.web_base_path or "",
+        inbound_port=node.inbound_port,
+        vless_domain=node.vless_domain,
+        vless_public_port=node.vless_public_port,
+        vless_path=node.vless_path,
+        vless_security=node.vless_security,
+        vless_sni=node.vless_sni,
+    )
+
+
+def _serialize_legacy_vpn_access(client: Client) -> dict:
     subscription_active = is_client_subscription_active(client)
+    manual_url = client.subscription_link
+    servers = []
+    if manual_url:
+        servers.append(
+            {
+                "code": DEFAULT_NODE_CONFIG.code,
+                "name": DEFAULT_NODE_CONFIG.name,
+                "display_name": DEFAULT_NODE_CONFIG.display_name,
+                "domain": DEFAULT_NODE_CONFIG.vless_domain,
+                "manual_url": manual_url,
+                "enabled": True,
+            }
+        )
 
     return {
         "access": bool(client.xui_uuid and client.subscription_link),
@@ -71,8 +105,168 @@ def serialize_vpn_access(client: Client) -> dict:
         "vpn": {
             "type": "xray_vless",
             "subscription_url": client.happ_subscription_url,
-            "manual_url": client.subscription_link,
-            "supports": ["android", "ios", "windows", "macos"],
+            "manual_url": manual_url,
+            "manual_urls": [manual_url] if manual_url else [],
+            "servers": servers,
+            "supports": SUPPORTED_PLATFORMS,
+        },
+    }
+
+
+async def _load_active_nodes(session: AsyncSession) -> list[VpnNode]:
+    try:
+        result = await session.execute(
+            select(VpnNode)
+            .where(VpnNode.is_active.is_(True))
+            .order_by(VpnNode.sort_order.asc(), VpnNode.id.asc())
+        )
+        return list(result.scalars().all())
+    except SQLAlchemyError:
+        logger.exception("Failed to load vpn_nodes, falling back to legacy single-node mode")
+        return []
+
+
+async def _load_client_access_pairs(
+    session: AsyncSession,
+    client_id: int,
+    *,
+    active_nodes_only: bool = False,
+    enabled_only: bool = False,
+) -> list[tuple[ClientVpnAccess, VpnNode]]:
+    try:
+        query = (
+            select(ClientVpnAccess, VpnNode)
+            .join(VpnNode, VpnNode.id == ClientVpnAccess.node_id)
+            .where(ClientVpnAccess.client_id == client_id)
+            .order_by(VpnNode.sort_order.asc(), VpnNode.id.asc(), ClientVpnAccess.id.asc())
+        )
+
+        if active_nodes_only:
+            query = query.where(VpnNode.is_active.is_(True))
+        if enabled_only:
+            query = query.where(ClientVpnAccess.is_enabled.is_(True))
+
+        result = await session.execute(query)
+        return list(result.all())
+    except SQLAlchemyError:
+        logger.exception("Failed to load client_vpn_access, falling back to legacy single-node mode")
+        return []
+
+
+async def _get_or_create_client_node_access(
+    session: AsyncSession,
+    client_id: int,
+    node_id: int,
+) -> ClientVpnAccess:
+    result = await session.execute(
+        select(ClientVpnAccess).where(
+            ClientVpnAccess.client_id == client_id,
+            ClientVpnAccess.node_id == node_id,
+        )
+    )
+    access = result.scalar_one_or_none()
+    if access:
+        return access
+
+    access = ClientVpnAccess(
+        client_id=client_id,
+        node_id=node_id,
+        is_enabled=True,
+    )
+    session.add(access)
+    await session.flush()
+    return access
+
+
+async def _sync_legacy_fields(session: AsyncSession, client: Client) -> None:
+    pairs = await _load_client_access_pairs(
+        session,
+        client.id,
+        active_nodes_only=True,
+        enabled_only=True,
+    )
+
+    if not pairs:
+        client.xui_uuid = None
+        client.xui_email = None
+        client.subscription_link = None
+        client.updated_at = datetime.utcnow()
+        return
+
+    primary_access, _primary_node = pairs[0]
+    client.login = primary_access.xui_email or client.login
+    client.xui_uuid = primary_access.xui_uuid
+    client.xui_email = primary_access.xui_email
+    client.subscription_link = primary_access.subscription_link
+    client.updated_at = datetime.utcnow()
+
+
+async def _collect_subscription_links(session: AsyncSession, client: Client) -> list[str]:
+    pairs = await _load_client_access_pairs(
+        session,
+        client.id,
+        active_nodes_only=True,
+        enabled_only=True,
+    )
+    links = [
+        access.subscription_link.strip()
+        for access, _node in pairs
+        if access.subscription_link and access.subscription_link.strip()
+    ]
+
+    if links:
+        return links
+
+    if client.subscription_link:
+        return [client.subscription_link.strip()]
+
+    return []
+
+
+async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client) -> dict:
+    subscription_active = is_client_subscription_active(client)
+    pairs = await _load_client_access_pairs(
+        session,
+        client.id,
+        active_nodes_only=True,
+        enabled_only=True,
+    )
+
+    if not pairs:
+        return _serialize_legacy_vpn_access(client)
+
+    servers = []
+    manual_urls = []
+
+    for access, node in pairs:
+        if not access.subscription_link:
+            continue
+        manual_urls.append(access.subscription_link)
+        servers.append(
+            {
+                "code": node.code,
+                "name": node.name,
+                "display_name": node.display_name,
+                "country_code": node.country_code,
+                "domain": node.vless_domain,
+                "manual_url": access.subscription_link,
+                "enabled": bool(access.is_enabled and node.is_active),
+            }
+        )
+
+    manual_url = manual_urls[0] if manual_urls else None
+
+    return {
+        "access": bool(manual_urls),
+        "subscription_active": subscription_active,
+        "expires_at": client.paid_until.isoformat() if client.paid_until else None,
+        "vpn": {
+            "type": "xray_vless",
+            "subscription_url": client.happ_subscription_url,
+            "manual_url": manual_url,
+            "manual_urls": manual_urls,
+            "servers": servers,
+            "supports": SUPPORTED_PLATFORMS,
         },
     }
 
@@ -116,55 +310,124 @@ async def get_client_by_id(client_id: int) -> Optional[Client]:
         return result.scalar_one_or_none()
 
 
+async def get_client_subscription_links_by_client_id(client_id: int) -> list[str]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Client).where(Client.id == client_id))
+        client = result.scalar_one_or_none()
+        if not client:
+            return []
+        return await _collect_subscription_links(session, client)
+
+
 async def get_client_vpn_access_by_client_id(client_id: int) -> Optional[dict]:
-    client = await get_client_by_id(client_id)
-    if not client:
-        return None
-    return serialize_vpn_access(client)
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Client).where(Client.id == client_id))
+        client = result.scalar_one_or_none()
+        if not client:
+            return None
+        return await _serialize_multi_node_vpn_access(session, client)
 
 
 async def get_client_vpn_access_by_telegram_id(telegram_id: str) -> Optional[dict]:
     client = await get_client_by_telegram_id(telegram_id)
     if not client:
         return None
-    return serialize_vpn_access(client)
+    return await get_client_vpn_access_by_client_id(client.id)
 
 
-async def _update_existing_client_access(
+async def _update_existing_access_for_node(
     session: AsyncSession,
     client: Client,
+    node: VpnNode,
+    access: ClientVpnAccess,
 ) -> bool:
     if not client.paid_until:
         logger.warning("Cannot update access: paid_until is empty for client_id=%s", client.id)
         return False
 
-    manager = VLESSManager()
+    manager = VLESSManager(node_config=build_node_config(node))
     paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
 
-    updated = False
+    if not access.xui_email and not access.xui_uuid:
+        return False
 
     try:
-        if client.xui_email:
-            updated = manager.enable_client(
-                email=client.xui_email,
-                expiry_time_ms=paid_until_ts_ms,
-                total_gb=0,
-            )
+        updated = manager.enable_client(
+            email=access.xui_email,
+            client_uuid=access.xui_uuid,
+            expiry_time_ms=paid_until_ts_ms,
+            total_gb=0,
+        )
     except TypeError:
         logger.exception("enable_client signature mismatch")
         updated = False
     except Exception:
-        logger.exception("Failed to enable/update existing client access client_id=%s", client.id)
+        logger.exception(
+            "Failed to enable/update existing client access client_id=%s node=%s",
+            client.id,
+            node.code,
+        )
         updated = False
 
     if updated:
-        if not client.happ_subscription_url:
-            ensure_happ_subscription_for_client(client)
-        client.updated_at = datetime.utcnow()
-        await session.commit()
+        refreshed_link = manager.get_client_link(
+            email=access.xui_email,
+            client_uuid=access.xui_uuid,
+        )
+        if refreshed_link:
+            access.subscription_link = refreshed_link
+        access.is_enabled = True
+        access.updated_at = datetime.utcnow()
+        await session.flush()
         return True
 
     return False
+
+
+async def _ensure_access_for_node(
+    session: AsyncSession,
+    client: Client,
+    node: VpnNode,
+) -> bool:
+    if not client.paid_until:
+        logger.warning("paid_until is empty for client_id=%s", client.id)
+        return False
+
+    access = await _get_or_create_client_node_access(session, client.id, node.id)
+    paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
+    xui_email = access.xui_email or client.login or make_xui_email(client)
+    external_identity = client.telegram_id or f"client_{client.id}"
+
+    if access.xui_email or access.xui_uuid:
+        synced = await _update_existing_access_for_node(session, client, node, access)
+        if synced:
+            return True
+
+    manager = VLESSManager(node_config=build_node_config(node))
+    created = manager.add_client(
+        telegram_id=external_identity,
+        full_name=client.full_name or client.email or xui_email,
+        xui_email=xui_email,
+        paid_until_ts_ms=paid_until_ts_ms,
+        total_gb=0,
+    )
+
+    if not created:
+        logger.error(
+            "Failed to create client access for client_id=%s node=%s",
+            client.id,
+            node.code,
+        )
+        return False
+
+    xui_uuid, xui_email, subscription_link = created
+    access.xui_uuid = xui_uuid
+    access.xui_email = xui_email
+    access.subscription_link = subscription_link
+    access.is_enabled = True
+    access.updated_at = datetime.utcnow()
+    await session.flush()
+    return True
 
 
 async def create_vpn_access_for_client_id(client_id: int) -> bool:
@@ -186,40 +449,23 @@ async def create_vpn_access_for_client_id(client_id: int) -> bool:
 
         ensure_happ_subscription_for_client(client)
 
-        if client.xui_uuid and client.subscription_link:
-            logger.info("Client already has access, syncing expiry client_id=%s", client_id)
-            synced = await _update_existing_client_access(session, client)
-            if synced:
+        nodes = await _load_active_nodes(session)
+        if not nodes:
+            logger.warning("No active vpn_nodes found, legacy single-node mode remains active")
+            if client.xui_uuid and client.subscription_link:
+                client.updated_at = datetime.utcnow()
+                await session.commit()
                 return True
-
-        xui_email = client.login or make_xui_email(client)
-        external_identity = client.telegram_id or f"client_{client.id}"
-
-        manager = VLESSManager()
-        paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
-
-        created = manager.add_client(
-            telegram_id=external_identity,
-            full_name=client.full_name or client.email or xui_email,
-            xui_email=xui_email,
-            paid_until_ts_ms=paid_until_ts_ms,
-            total_gb=0,
-        )
-
-        if not created:
-            logger.error("Failed to create client access for client_id=%s", client_id)
             return False
 
-        xui_uuid, xui_email, subscription_link = created
+        ok = True
+        for node in nodes:
+            node_ok = await _ensure_access_for_node(session, client, node)
+            ok = ok and node_ok
 
-        client.login = xui_email
-        client.xui_email = xui_email
-        client.xui_uuid = xui_uuid
-        client.subscription_link = subscription_link
-        client.updated_at = datetime.utcnow()
-
+        await _sync_legacy_fields(session, client)
         await session.commit()
-        return True
+        return ok
 
 
 async def create_vpn_access_for_client(telegram_id: str) -> bool:
@@ -243,31 +489,46 @@ async def disable_vpn_access_for_client_id(client_id: int) -> bool:
             logger.warning("Client not found for client_id=%s", client_id)
             return False
 
-        if not client.xui_email and not client.xui_uuid:
-            logger.info("Client has no xray access client_id=%s", client_id)
-            return True
-
-        manager = VLESSManager()
-
-        disabled = False
-        try:
-            if client.xui_email:
-                disabled = manager.disable_client(email=client.xui_email)
-            elif client.xui_uuid:
-                disabled = manager.disable_client(client_uuid=client.xui_uuid)
-        except TypeError:
-            logger.exception("disable_client signature mismatch")
-            disabled = False
-        except Exception:
-            logger.exception("Failed to disable VPN access for client_id=%s", client_id)
-            disabled = False
-
-        if disabled:
+        pairs = await _load_client_access_pairs(session, client.id)
+        if not pairs:
+            logger.info("Client has no multi-node xray access client_id=%s", client_id)
             client.updated_at = datetime.utcnow()
             await session.commit()
             return True
 
-        return False
+        overall_ok = True
+
+        for access, node in pairs:
+            if not access.xui_email and not access.xui_uuid:
+                access.is_enabled = False
+                continue
+
+            manager = VLESSManager(node_config=build_node_config(node))
+
+            try:
+                disabled = manager.disable_client(
+                    email=access.xui_email,
+                    client_uuid=access.xui_uuid,
+                )
+            except TypeError:
+                logger.exception("disable_client signature mismatch")
+                disabled = False
+            except Exception:
+                logger.exception(
+                    "Failed to disable VPN access for client_id=%s node=%s",
+                    client.id,
+                    node.code,
+                )
+                disabled = False
+
+            overall_ok = overall_ok and disabled
+            if disabled:
+                access.is_enabled = False
+                access.updated_at = datetime.utcnow()
+
+        await _sync_legacy_fields(session, client)
+        await session.commit()
+        return overall_ok
 
 
 async def disable_vpn_access_for_client(telegram_id: str) -> bool:
