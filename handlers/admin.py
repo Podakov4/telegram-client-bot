@@ -21,7 +21,8 @@ router = Router()
 HAPP_SITE_URL = "https://www.happ.su/main/ru"
 HAPP_APPSTORE_URL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
 HAPP_GOOGLEPLAY_URL = "https://play.google.com/store/apps/details?id=com.happproxy"
-HAPP_DESKTOP_RELEASES_URL = "https://github.com/Happ-proxy/happ-desktop/releases"
+HAPP_WINDOWS_URL = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/setup-Happ.x64.exe"
+HAPP_MACOS_URL = "https://github.com/Happ-proxy/happ-desktop/releases/latest/download/Happ.macOS.universal.dmg"
 
 
 
@@ -102,7 +103,8 @@ def client_instructions_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Happ для iPhone / iPad", url=HAPP_APPSTORE_URL)
     builder.button(text="Happ для Android", url=HAPP_GOOGLEPLAY_URL)
-    builder.button(text="Happ для Windows / macOS", url=HAPP_DESKTOP_RELEASES_URL)
+    builder.button(text="Happ для Windows", url=HAPP_WINDOWS_URL)
+    builder.button(text="Happ для macOS", url=HAPP_MACOS_URL)
     builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
     builder.adjust(1)
     return builder.as_markup()
@@ -294,7 +296,7 @@ async def send_instructions_to_client(bot: Bot, client: Client) -> tuple[bool, s
         "2. Откройте сообщение с доступом или раздел «Мой доступ» в боте\n"
         "3. Используйте «Подключить в Happ», «Показать данные для подключения» или «Показать QR-код»\n"
         "4. Импортируйте доступ в Happ и включите подключение\n\n"
-        "Ниже — ссылки на загрузку приложений Happ."
+        "Ниже — прямые ссылки на скачивание Happ для вашей платформы."
     )
 
     try:
