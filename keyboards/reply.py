@@ -1,5 +1,7 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
+from config import ADMIN_IDS
+
 
 def main_reply_keyboard(
     user_id: int,
@@ -7,8 +9,6 @@ def main_reply_keyboard(
     has_active_access: bool = False,
     trial_used: bool = False,
 ) -> ReplyKeyboardMarkup:
-    del user_id  # задел на будущее, если понадобится персонализация меню
-
     primary_action = "Продлить доступ" if has_active_access or trial_used else "Попробовать 7 дней"
 
     rows = [
@@ -21,6 +21,9 @@ def main_reply_keyboard(
             KeyboardButton(text="Поддержка"),
         ],
     ]
+
+    if user_id in ADMIN_IDS:
+        rows.append([KeyboardButton(text="Помощь")])
 
     return ReplyKeyboardMarkup(
         keyboard=rows,
