@@ -53,6 +53,7 @@ def admin_client_actions_keyboard(client_id: int):
     return builder.as_markup()
 
 
+
 def admin_search_results_keyboard(clients: list[Client]):
     builder = InlineKeyboardBuilder()
     for client in clients:
