@@ -12,6 +12,31 @@ from keyboards.reply import main_reply_keyboard
 router = Router()
 
 
+def client_has_trial_used(client: Client | None) -> bool:
+    return bool(client and client.notes and "trial_used=true" in client.notes)
+
+
+def client_has_active_access(client: Client | None) -> bool:
+    if client is None:
+        return False
+
+    if client.is_active and client.subscription_link:
+        return True
+
+    if client.paid_until and client.paid_until > datetime.utcnow() and client.subscription_link:
+        return True
+
+    return False
+
+
+def keyboard_for_client(client: Client | None, user_id: int):
+    return main_reply_keyboard(
+        user_id,
+        has_active_access=client_has_active_access(client),
+        trial_used=client_has_trial_used(client),
+    )
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     telegram_id = str(message.from_user.id)
@@ -36,24 +61,39 @@ async def cmd_start(message: Message):
             )
             session.add(client)
             await session.commit()
+        elif client.full_name != full_name:
+            client.full_name = full_name
+            client.updated_at = datetime.utcnow()
+            await session.commit()
 
     if is_new_user:
         await message.answer(
             f"Здравствуйте, {full_name}!\n\n"
-            "Добро пожаловать в Freeth.\n\n"
-            "Freeth — цифровой сервис с доступом по подписке.\n\n"
-            "Что доступно в боте:\n"
-            "• пробный период 7 дней\n"
-            "• тарифы на 1, 3 и 12 месяцев\n"
-            "• данные и QR-код для подключения\n"
-            "• инструкции по подключению\n"
-            "• поддержка и документы\n\n"
-            "Выберите действие в меню ниже.",
-            reply_markup=main_reply_keyboard(message.from_user.id),
+            "Добро пожаловать в <b>Freeth</b>.\n\n"
+            "Здесь вы можете:\n"
+            "• получить пробный доступ на 7 дней\n"
+            "• подключить телефон или компьютер\n"
+            "• управлять доступом и устройствами\n"
+            "• позже входить в приложение как тот же клиент\n\n"
+            "Начните с одного из шагов ниже.",
+            reply_markup=keyboard_for_client(client, message.from_user.id),
+        )
+        return
+
+    if client_has_active_access(client):
+        text = (
+            f"С возвращением, {full_name}!\n\n"
+            "Откройте <b>«Мой доступ»</b>, чтобы посмотреть статус, подключение, устройства "
+            "и вход в приложение."
         )
     else:
-        await message.answer(
+        text = (
             f"С возвращением, {full_name}!\n\n"
-            "Откройте подписку, оплату, инструкции или поддержку через меню ниже.",
-            reply_markup=main_reply_keyboard(message.from_user.id),
+            "Сейчас вы можете открыть <b>«Мой доступ»</b>, активировать пробный период "
+            "или продлить доступ."
         )
+
+    await message.answer(
+        text,
+        reply_markup=keyboard_for_client(client, message.from_user.id),
+    )

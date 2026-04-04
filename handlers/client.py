@@ -16,68 +16,113 @@ from config import (
 )
 from database.db import AsyncSessionLocal
 from database.models import Client
+from handlers.instructions import instructions_keyboard
 from keyboards.reply import main_reply_keyboard
 from services.auth_service import AuthError, AuthService
 from services.device_service import DeviceNotFoundError, DeviceService
-from services.payments import (
-    activate_trial_subscription,
-    create_checkout_payment,
-)
+from services.payments import activate_trial_subscription, create_checkout_payment
 from services.subscriptions import get_client_subscription_status, get_expiring_clients
 
 router = Router()
 
 
-def format_profile_text(client: Client) -> str:
-    status_text = "активна" if client.is_active else "неактивна"
-    paid_text = "да" if client.is_paid else "нет"
+def client_has_trial_used(client: Client | None) -> bool:
+    return bool(client and client.notes and "trial_used=true" in client.notes)
+
+
+def client_has_active_access(client: Client | None) -> bool:
+    if client is None:
+        return False
+
+    if client.is_active and client.subscription_link:
+        return True
+
+    if client.paid_until and client.paid_until > datetime.utcnow() and client.subscription_link:
+        return True
+
+    return False
+
+
+def build_reply_keyboard_for_client(client: Client | None, user_id: int):
+    return main_reply_keyboard(
+        user_id,
+        has_active_access=client_has_active_access(client),
+        trial_used=client_has_trial_used(client),
+    )
+
+
+def format_access_text(client: Client, *, active_devices: int, max_devices: int, is_active: bool) -> str:
+    status_text = "активен" if is_active else "не активен"
 
     if client.paid_until:
         paid_until_text = client.paid_until.strftime("%Y-%m-%d %H:%M")
         days_left = (client.paid_until - datetime.utcnow()).days
-        days_left_text = "истекла" if days_left < 0 else f"{days_left} дн."
+        days_left_text = "истек" if days_left < 0 else f"{days_left} дн."
     else:
         paid_until_text = "не указано"
-        days_left_text = "не указано"
+        days_left_text = "—"
 
-    trial_used = "да" if client.notes and "trial_used=true" in client.notes else "нет"
+    trial_text = "использован" if client_has_trial_used(client) else "доступен"
+    email_text = getattr(client, "email", None) or "не привязан"
 
-    return (
-        f"<b>Ваш профиль</b>\n\n"
-        f"Статус подписки: {status_text}\n"
-        f"Оплачено: {paid_text}\n"
-        f"Пробный период использован: {trial_used}\n"
-        f"Активно до: {paid_until_text}\n"
-        f"Осталось: {days_left_text}\n\n"
-        f"Имя: {client.full_name or 'не указано'}\n"
-        f"Telegram ID: <code>{client.telegram_id}</code>"
-    )
-
-
-def format_subscription_text(client: Client) -> str:
-    if not client.subscription_link:
-        return (
-            "<b>Подписка</b>\n\n"
-            "У вас пока нет активного доступа.\n"
-            "Сначала активируйте пробный период или оформите подписку."
+    if is_active:
+        intro_text = "Доступ активен. Ниже выберите нужное действие."
+    else:
+        intro_text = (
+            "Сейчас активного доступа нет. Вы можете попробовать 7 дней или оформить подписку."
         )
 
     return (
-        "<b>Подписка</b>\n\n"
-        "Доступ подготовлен.\n"
-        "Вы можете подключиться через Happ, посмотреть данные для подключения, QR-код "
-        "или войти в приложение."
+        "<b>Мой доступ</b>\n\n"
+        f"Статус: <b>{status_text}</b>\n"
+        f"Доступ до: <b>{paid_until_text}</b>\n"
+        f"Осталось: <b>{days_left_text}</b>\n"
+        f"Пробный период: <b>{trial_text}</b>\n"
+        f"Email: <b>{email_text}</b>\n"
+        f"Устройства: <b>{active_devices}/{max_devices}</b>\n\n"
+        f"{intro_text}"
     )
 
 
-def subscription_actions_keyboard():
+def access_actions_keyboard(client: Client):
     builder = InlineKeyboardBuilder()
-    builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
-    builder.button(text="Показать данные для подключения", callback_data="show_vless_link")
-    builder.button(text="Показать QR-код", callback_data="show_vless_qr")
+    has_access = client_has_active_access(client)
+    trial_used = client_has_trial_used(client)
+
+    if has_access:
+        if client.happ_subscription_url:
+            builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
+        if client.subscription_link:
+            builder.button(
+                text="Показать данные для подключения",
+                callback_data="show_vless_link",
+            )
+            builder.button(text="Показать QR-код", callback_data="show_vless_qr")
+        builder.button(text="Войти в приложение", callback_data="open_app_login_menu")
+        builder.button(text="Мои устройства", callback_data="show_my_devices")
+        builder.button(text="Продлить доступ", callback_data="open_payment_menu")
+    else:
+        if not trial_used:
+            builder.button(text="Попробовать 7 дней", callback_data="activate_trial")
+        builder.button(text="Продлить доступ", callback_data="open_payment_menu")
+        builder.button(text="Как подключить", callback_data="open_instructions_from_access")
+
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def trial_onboarding_keyboard(client: Client):
+    builder = InlineKeyboardBuilder()
+    if client.happ_subscription_url:
+        builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
+    if client.subscription_link:
+        builder.button(text="Показать QR-код", callback_data="show_vless_qr")
+        builder.button(
+            text="Данные для подключения",
+            callback_data="show_vless_link",
+        )
+    builder.button(text="Как подключить", callback_data="open_instructions_from_access")
     builder.button(text="Войти в приложение", callback_data="open_app_login_menu")
-    builder.button(text="Мои устройства", callback_data="show_my_devices")
-    builder.button(text="Продлить подписку", callback_data="open_payment_menu")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -100,7 +145,7 @@ def payment_checkout_keyboard(payment_url: str):
 
 def renewal_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="Продлить подписку", callback_data="open_payment_menu")
+    builder.button(text="Продлить доступ", callback_data="open_payment_menu")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -156,6 +201,22 @@ async def get_client_by_telegram_id(telegram_id: str):
         return result.scalar_one_or_none()
 
 
+async def send_access_message(message: Message, client: Client):
+    async with AsyncSessionLocal() as session:
+        limit_info = await DeviceService.get_device_limit_info(db=session, client=client)
+        sub_status = await get_client_subscription_status(client=client, db=session)
+
+    await message.answer(
+        format_access_text(
+            client,
+            active_devices=limit_info.active_devices,
+            max_devices=limit_info.max_devices,
+            is_active=sub_status.is_active or client_has_active_access(client),
+        ),
+        reply_markup=access_actions_keyboard(client),
+    )
+
+
 async def send_devices_message(message: Message, client: Client):
     async with AsyncSessionLocal() as session:
         devices = await DeviceService.list_devices(
@@ -163,10 +224,7 @@ async def send_devices_message(message: Message, client: Client):
             client_id=client.id,
             include_revoked=True,
         )
-        limit_info = await DeviceService.get_device_limit_info(
-            db=session,
-            client=client,
-        )
+        limit_info = await DeviceService.get_device_limit_info(db=session, client=client)
         sub_status = await get_client_subscription_status(client=client, db=session)
 
     header = (
@@ -178,7 +236,7 @@ async def send_devices_message(message: Message, client: Client):
     if not devices:
         await message.answer(
             header + "У вас пока нет зарегистрированных устройств.",
-            reply_markup=main_reply_keyboard(message.from_user.id),
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
         )
         return
 
@@ -197,10 +255,7 @@ async def send_devices_callback_message(callback: CallbackQuery, client: Client)
             client_id=client.id,
             include_revoked=True,
         )
-        limit_info = await DeviceService.get_device_limit_info(
-            db=session,
-            client=client,
-        )
+        limit_info = await DeviceService.get_device_limit_info(db=session, client=client)
         sub_status = await get_client_subscription_status(client=client, db=session)
 
     header = (
@@ -212,7 +267,7 @@ async def send_devices_callback_message(callback: CallbackQuery, client: Client)
     if not devices:
         await callback.message.answer(
             header + "У вас пока нет зарегистрированных устройств.",
-            reply_markup=main_reply_keyboard(callback.from_user.id),
+            reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
         )
         await callback.answer()
         return
@@ -236,28 +291,25 @@ async def start_checkout(callback: CallbackQuery, months: int):
             full_name=full_name,
             months=months,
         )
-    except Exception as e:
-        await callback.message.answer(f"Не удалось создать платеж: {e}")
+    except Exception as exc:
+        await callback.message.answer(f"Не удалось создать платеж: {exc}")
         await callback.answer()
         return
 
     await callback.message.answer(
-        "Вы оформляете подписку <b>Freeth</b> "
+        "Вы оформляете доступ <b>Freeth</b> "
         f"на <b>{months} мес.</b>\n\n"
         "Для продолжения:\n"
         "1. Нажмите «Перейти к оплате»\n"
         "2. Завершите оплату\n"
-        "3. После успешной оплаты подписка активируется автоматически\n\n"
+        "3. После успешной оплаты доступ активируется автоматически\n\n"
         "Обычно это происходит без дополнительных действий в боте.",
         reply_markup=payment_checkout_keyboard(payment_url),
     )
     await callback.answer()
 
 
-async def send_app_login_code_message(
-    callback: CallbackQuery,
-    platform: str,
-):
+async def send_app_login_code_message(callback: CallbackQuery, platform: str):
     telegram_id = str(callback.from_user.id)
 
     client = await get_client_by_telegram_id(telegram_id)
@@ -297,7 +349,7 @@ async def send_app_login_code_message(
         "3. Введите этот код\n\n"
         "Никому не передавайте код. После использования он станет недействительным.",
         parse_mode="HTML",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
     await callback.answer("Код создан")
 
@@ -318,40 +370,18 @@ async def send_app_login_menu_message(message: Message):
 
 
 @router.message(Command("profile"))
-@router.message(F.text == "Мой профиль")
-async def cmd_profile(message: Message):
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-
-    if client is None:
-        await message.answer("Профиль пока не найден. Нажмите /start")
-        return
-
-    await message.answer(
-        format_profile_text(client),
-        reply_markup=main_reply_keyboard(message.from_user.id),
-    )
-
-
 @router.message(Command("subscription"))
+@router.message(F.text == "Мой доступ")
+@router.message(F.text == "Мой профиль")
 @router.message(F.text == "Моя подписка")
-async def cmd_subscription(message: Message):
+async def cmd_access(message: Message):
     client = await get_client_by_telegram_id(str(message.from_user.id))
 
     if client is None:
         await message.answer("Профиль пока не найден. Нажмите /start")
         return
 
-    if not client.subscription_link:
-        await message.answer(
-            format_subscription_text(client),
-            reply_markup=main_reply_keyboard(message.from_user.id),
-        )
-        return
-
-    await message.answer(
-        format_subscription_text(client),
-        reply_markup=subscription_actions_keyboard(),
-    )
+    await send_access_message(message, client)
 
 
 @router.message(Command("devices"))
@@ -415,7 +445,7 @@ async def cb_revoke_device(callback: CallbackQuery):
         "Устройство отключено:\n\n"
         f"<b>{device.device_name or device.platform or 'device'}</b>\n"
         f"ID: <code>{device.id}</code>",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
     await callback.answer("Устройство отключено")
 
@@ -434,7 +464,7 @@ async def cb_show_happ_subscription(callback: CallbackQuery):
         f"<code>{client.happ_subscription_url}</code>\n\n"
         "Откройте Happ и импортируйте эту ссылку как подписку.",
         parse_mode="HTML",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
     await callback.answer()
 
@@ -452,7 +482,7 @@ async def cb_show_vless_link(callback: CallbackQuery):
         "Данные для подключения:\n\n"
         f"<code>{client.subscription_link}</code>",
         parse_mode="HTML",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
     await callback.answer()
 
@@ -475,15 +505,12 @@ async def cb_show_vless_qr(callback: CallbackQuery):
     img.save(buffer, format="PNG")
     buffer.seek(0)
 
-    photo = BufferedInputFile(
-        buffer.getvalue(),
-        filename="access_qr.png",
-    )
+    photo = BufferedInputFile(buffer.getvalue(), filename="access_qr.png")
 
     await callback.message.answer_photo(
         photo,
         caption="QR-код для подключения.",
-        reply_markup=main_reply_keyboard(callback.from_user.id),
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
     await callback.answer()
 
@@ -491,14 +518,12 @@ async def cb_show_vless_qr(callback: CallbackQuery):
 @router.callback_query(F.data == "open_payment_menu")
 async def cb_open_payment_menu(callback: CallbackQuery):
     await callback.message.answer(
-        "<b>Freeth</b>\n\n"
-        "Цифровой сервис с доступом по подписке.\n\n"
-        "Тарифы:\n"
+        "<b>Тарифы Freeth</b>\n\n"
+        "Выберите подходящий вариант доступа:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
         f"• 3 месяца — {PRICE_3_MONTHS}\n"
         f"• 12 месяцев — {PRICE_12_MONTHS}\n\n"
-        "Также доступен пробный период на 7 дней.\n\n"
-        "Выберите подходящий тариф ниже.",
+        "Для новых пользователей также доступен пробный период на 7 дней.",
         reply_markup=payment_keyboard(),
     )
     await callback.answer()
@@ -511,6 +536,16 @@ async def cb_open_app_login_menu(callback: CallbackQuery):
         "Выберите платформу, для которой нужно создать одноразовый код входа.\n\n"
         "Код действует несколько минут и подходит для входа без пароля.",
         reply_markup=app_login_menu_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "open_instructions_from_access")
+async def cb_open_instructions_from_access(callback: CallbackQuery):
+    await callback.message.answer(
+        "<b>Как подключить Freeth</b>\n\n"
+        "Выберите ваше устройство. Я покажу, что скачать и как добавить доступ.",
+        reply_markup=instructions_keyboard(),
     )
     await callback.answer()
 
@@ -540,42 +575,85 @@ async def cb_app_login_code_macos(callback: CallbackQuery):
     await send_app_login_code_message(callback, platform="macos")
 
 
-@router.message(F.text == "Пробный период 7 дней")
-async def trial_period(message: Message):
+async def activate_trial_and_respond(message: Message):
     ok, text = await activate_trial_subscription(str(message.from_user.id), days=7)
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
 
     if not ok:
         await message.answer(
             text,
-            reply_markup=main_reply_keyboard(message.from_user.id),
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
         )
         return
 
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-
     await message.answer(
-        "Пробный период на 7 дней активирован.",
-        reply_markup=main_reply_keyboard(message.from_user.id),
+        "<b>Пробный доступ активирован на 7 дней.</b>\n\n"
+        "Теперь:\n"
+        "1. Скачайте приложение для своего устройства\n"
+        "2. Подключите доступ\n"
+        "3. Проверьте, что все работает\n\n"
+        "Ниже — самые быстрые действия для старта.",
+        reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
     )
 
-    if client and client.subscription_link:
+    if client and (client.subscription_link or client.happ_subscription_url):
         await message.answer(
-            "Доступ подготовлен.",
-            reply_markup=subscription_actions_keyboard(),
+            "Доступ подготовлен. Выберите удобный способ подключения.",
+            reply_markup=trial_onboarding_keyboard(client),
         )
 
 
+@router.message(F.text == "Попробовать 7 дней")
+async def trial_period(message: Message):
+    await activate_trial_and_respond(message)
+
+
+@router.callback_query(F.data == "activate_trial")
+async def cb_activate_trial(callback: CallbackQuery):
+    message = callback.message
+    ok, text = await activate_trial_subscription(str(callback.from_user.id), days=7)
+
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if not ok:
+        await message.answer(
+            text,
+            reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
+        )
+        await callback.answer()
+        return
+
+    await message.answer(
+        "<b>Пробный доступ активирован на 7 дней.</b>\n\n"
+        "Теперь:\n"
+        "1. Скачайте приложение для своего устройства\n"
+        "2. Подключите доступ\n"
+        "3. Проверьте, что все работает\n\n"
+        "Ниже — самые быстрые действия для старта.",
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
+    )
+
+    if client and (client.subscription_link or client.happ_subscription_url):
+        await message.answer(
+            "Доступ подготовлен. Выберите удобный способ подключения.",
+            reply_markup=trial_onboarding_keyboard(client),
+        )
+
+    await callback.answer()
+
+
 @router.message(F.text == "Оплата")
+@router.message(F.text == "Тарифы")
+@router.message(F.text == "Продлить доступ")
 async def payment_menu(message: Message):
     await message.answer(
-        "<b>Freeth</b>\n\n"
-        "Цифровой сервис с доступом по подписке.\n\n"
-        "Тарифы:\n"
+        "<b>Тарифы Freeth</b>\n\n"
+        "Выберите подходящий вариант доступа:\n"
         f"• 1 месяц — {PRICE_1_MONTH}\n"
         f"• 3 месяца — {PRICE_3_MONTHS}\n"
         f"• 12 месяцев — {PRICE_12_MONTHS}\n\n"
-        "Также доступен пробный период на 7 дней.\n\n"
-        "Выберите подходящий тариф ниже.",
+        "Для новых пользователей также доступен пробный период на 7 дней.",
         reply_markup=payment_keyboard(),
     )
 
@@ -610,9 +688,7 @@ async def cmd_check_expiring(message: Message):
     lines = ["Подписки, истекающие в ближайшие 3 дня:\n"]
     for client in clients:
         paid_until = (
-            client.paid_until.strftime("%Y-%m-%d %H:%M")
-            if client.paid_until
-            else "Не указано"
+            client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
         )
         lines.append(
             f"ID={client.id} | tg={client.telegram_id} | "
@@ -636,13 +712,11 @@ async def cmd_preview_expiring(message: Message):
 
     for client in clients:
         paid_until = (
-            client.paid_until.strftime("%Y-%m-%d %H:%M")
-            if client.paid_until
-            else "Не указано"
+            client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
         )
         await message.answer(
             f"Напоминание для {client.full_name or 'Без имени'}:\n\n"
-            f"Подписка истекает: {paid_until}",
+            f"Доступ истекает: {paid_until}",
             reply_markup=renewal_keyboard(),
         )
 
@@ -652,22 +726,17 @@ async def help_message(message: Message):
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "Доступные действия:\n"
-            "• Мой профиль\n"
-            "• Моя подписка\n"
-            "• Мои устройства\n"
-            "• Пробный период 7 дней\n"
-            "• Оплата\n"
-            "• Войти в приложение\n"
-            "• Инструкции\n"
-            "• Документы\n"
+            "• Мой доступ\n"
+            "• Как подключить\n"
+            "• Попробовать 7 дней / Продлить доступ\n"
             "• Поддержка\n\n"
-            "В подписке доступны:\n"
+            "В разделе «Мой доступ» доступны:\n"
             "• Подключить в Happ\n"
             "• Показать данные для подключения\n"
             "• Показать QR-код\n"
             "• Войти в приложение\n"
             "• Мои устройства\n"
-            "• Продлить подписку\n\n"
+            "• Продлить доступ\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
             "• /find [telegram_id | id | имя] — найти клиента\n"
@@ -675,26 +744,27 @@ async def help_message(message: Message):
             "• /news — создать новость и сделать рассылку\n"
             "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
             "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
-            reply_markup=main_reply_keyboard(message.from_user.id),
+            reply_markup=build_reply_keyboard_for_client(
+                await get_client_by_telegram_id(str(message.from_user.id)),
+                message.from_user.id,
+            ),
         )
     else:
         await message.answer(
             "Доступные действия:\n"
-            "• Мой профиль\n"
-            "• Моя подписка\n"
-            "• Мои устройства\n"
-            "• Пробный период 7 дней\n"
-            "• Оплата\n"
-            "• Войти в приложение\n"
-            "• Инструкции\n"
-            "• Документы\n"
+            "• Мой доступ\n"
+            "• Как подключить\n"
+            "• Попробовать 7 дней / Продлить доступ\n"
             "• Поддержка\n\n"
-            "В подписке доступны:\n"
+            "В разделе «Мой доступ» доступны:\n"
             "• Подключить в Happ\n"
             "• Показать данные для подключения\n"
             "• Показать QR-код\n"
             "• Войти в приложение\n"
             "• Мои устройства\n"
-            "• Продлить подписку\n",
-            reply_markup=main_reply_keyboard(message.from_user.id),
+            "• Продлить доступ",
+            reply_markup=build_reply_keyboard_for_client(
+                await get_client_by_telegram_id(str(message.from_user.id)),
+                message.from_user.id,
+            ),
         )

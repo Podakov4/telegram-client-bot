@@ -1,27 +1,24 @@
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 
-def main_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+def main_reply_keyboard(
+    user_id: int,
+    *,
+    has_active_access: bool = False,
+    trial_used: bool = False,
+) -> ReplyKeyboardMarkup:
+    del user_id  # задел на будущее, если понадобится персонализация меню
+
+    primary_action = "Продлить доступ" if has_active_access or trial_used else "Попробовать 7 дней"
+
     rows = [
         [
-            KeyboardButton(text="Мой профиль"),
-            KeyboardButton(text="Моя подписка"),
+            KeyboardButton(text="Мой доступ"),
+            KeyboardButton(text="Как подключить"),
         ],
         [
-            KeyboardButton(text="Мои устройства"),
-            KeyboardButton(text="Оплата"),
-        ],
-        [
-            KeyboardButton(text="Пробный период 7 дней"),
-            KeyboardButton(text="Войти в приложение"),
-        ],
-        [
-            KeyboardButton(text="Инструкции"),
+            KeyboardButton(text=primary_action),
             KeyboardButton(text="Поддержка"),
-        ],
-        [
-            KeyboardButton(text="Документы"),
-            KeyboardButton(text="Помощь"),
         ],
     ]
 

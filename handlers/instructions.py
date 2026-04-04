@@ -2,6 +2,8 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import SUPPORT_URL
+
 router = Router()
 
 HAPP_SITE_URL = "https://www.happ.su/main/ru"
@@ -15,105 +17,112 @@ def instructions_keyboard():
     builder.button(text="iPhone / iPad", callback_data="instr_ios")
     builder.button(text="Android", callback_data="instr_android")
     builder.button(text="Windows", callback_data="instr_windows")
-    builder.button(text="Mac", callback_data="instr_mac")
+    builder.button(text="macOS", callback_data="instr_mac")
     builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
     builder.adjust(2, 2, 1)
     return builder.as_markup()
 
 
+def platform_keyboard(download_text: str, download_url: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text=download_text, url=download_url)
+    builder.button(text="Написать в поддержку", url=SUPPORT_URL)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+@router.message(F.text == "Как подключить")
 @router.message(F.text == "Инструкции")
 async def instructions_menu(message: Message):
     await message.answer(
-        "Выберите платформу:\n\n"
-        "Я покажу, какое приложение установить и как импортировать данные для подключения.",
+        "<b>Как подключить Freeth</b>\n\n"
+        "Выберите ваше устройство. Я покажу:\n"
+        "• что скачать\n"
+        "• как добавить доступ\n"
+        "• как включить подключение\n"
+        "• как проверить, что все работает",
         reply_markup=instructions_keyboard(),
     )
 
 
 @router.callback_query(F.data == "instr_ios")
 async def instr_ios(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Скачать Happ для iPhone / iPad", url=HAPP_APPSTORE_URL)
-    builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
-    builder.adjust(1)
-
     await callback.message.answer(
-        "iPhone / iPad:\n\n"
+        "<b>iPhone / iPad</b>\n\n"
         "1. Установите Happ из App Store.\n"
-        "2. Откройте бота и зайдите в «Моя подписка».\n"
-        "3. Нажмите «Показать данные для подключения» или «Показать QR-код».\n"
-        "4. Импортируйте данные в Happ.\n"
-        "5. Активируйте подключение внутри приложения.",
-        reply_markup=builder.as_markup(),
+        "2. В боте откройте <b>«Мой доступ»</b>.\n"
+        "3. Нажмите <b>«Показать QR-код»</b> или <b>«Данные для подключения»</b>.\n"
+        "4. Импортируйте доступ в Happ.\n"
+        "5. Включите подключение внутри приложения.\n\n"
+        "Если что-то не заработало, напишите в поддержку.",
+        reply_markup=platform_keyboard(
+            "Скачать Happ для iPhone / iPad",
+            HAPP_APPSTORE_URL,
+        ),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "instr_android")
 async def instr_android(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Скачать Happ для Android", url=HAPP_GOOGLEPLAY_URL)
-    builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
-    builder.adjust(1)
-
     await callback.message.answer(
-        "Android:\n\n"
+        "<b>Android</b>\n\n"
         "1. Установите Happ из Google Play.\n"
-        "2. Откройте бота и зайдите в «Моя подписка».\n"
-        "3. Нажмите «Показать данные для подключения» или «Показать QR-код».\n"
-        "4. Импортируйте данные в Happ.\n"
+        "2. В боте откройте <b>«Мой доступ»</b>.\n"
+        "3. Нажмите <b>«Показать QR-код»</b> или <b>«Данные для подключения»</b>.\n"
+        "4. Импортируйте доступ в Happ.\n"
         "5. Включите подключение внутри приложения.\n\n"
-        "Чаще всего удобнее импортировать QR-код.",
-        reply_markup=builder.as_markup(),
+        "Обычно на Android удобнее импортировать QR-код.",
+        reply_markup=platform_keyboard(
+            "Скачать Happ для Android",
+            HAPP_GOOGLEPLAY_URL,
+        ),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "instr_windows")
 async def instr_windows(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Скачать Happ для Windows", url=HAPP_DESKTOP_RELEASES_URL)
-    builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
-    builder.adjust(1)
-
     await callback.message.answer(
-        "Windows:\n\n"
+        "<b>Windows</b>\n\n"
         "1. Скачайте Happ для Windows.\n"
         "2. Установите и откройте приложение.\n"
-        "3. В боте откройте «Моя подписка».\n"
+        "3. В боте откройте <b>«Мой доступ»</b>.\n"
         "4. Возьмите данные для подключения или QR-код.\n"
         "5. Импортируйте их в Happ и подключитесь.\n\n"
-        "На ПК обычно удобнее вставить данные вручную.",
-        reply_markup=builder.as_markup(),
+        "На ПК чаще всего удобнее вставить данные вручную.",
+        reply_markup=platform_keyboard(
+            "Скачать Happ для Windows",
+            HAPP_DESKTOP_RELEASES_URL,
+        ),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "instr_mac")
 async def instr_mac(callback: CallbackQuery):
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Скачать Happ для Mac", url=HAPP_DESKTOP_RELEASES_URL)
-    builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
-    builder.adjust(1)
-
     await callback.message.answer(
-        "Mac:\n\n"
+        "<b>macOS</b>\n\n"
         "1. Скачайте Happ для macOS.\n"
         "2. Установите и откройте приложение.\n"
-        "3. В боте откройте «Моя подписка».\n"
+        "3. В боте откройте <b>«Мой доступ»</b>.\n"
         "4. Импортируйте данные для подключения или QR-код в Happ.\n"
         "5. Включите подключение.\n\n"
         "Если система запросит разрешения для работы приложения, подтвердите их.",
-        reply_markup=builder.as_markup(),
+        reply_markup=platform_keyboard(
+            "Скачать Happ для macOS",
+            HAPP_DESKTOP_RELEASES_URL,
+        ),
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "open_instructions_from_support")
-async def open_instructions_from_support(callback: CallbackQuery):
+@router.callback_query(F.data == "open_instructions_from_access")
+async def open_instructions_from_anywhere(callback: CallbackQuery):
     await callback.message.answer(
-        "Выберите платформу:\n\n"
-        "Я покажу, какое приложение установить и как импортировать данные для подключения.",
+        "<b>Как подключить Freeth</b>\n\n"
+        "Выберите ваше устройство. Я покажу, что скачать и как импортировать доступ.",
         reply_markup=instructions_keyboard(),
     )
     await callback.answer()
