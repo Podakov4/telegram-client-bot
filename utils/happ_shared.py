@@ -1,5 +1,7 @@
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from config import SUPPORT_URL
+
 HAPP_SITE_URL = "https://www.happ.su/main/ru"
 HAPP_APPSTORE_URL = "https://apps.apple.com/us/app/happ-proxy-utility/id6504287215"
 HAPP_GOOGLEPLAY_URL = "https://play.google.com/store/apps/details?id=com.happproxy"
@@ -18,9 +20,9 @@ def device_selection_keyboard():
     return builder.as_markup()
 
 
-def support_only_keyboard():
+def support_contact_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="Написать в поддержку", callback_data="open_support_from_instructions")
+    builder.button(text="Написать в поддержку", url=SUPPORT_URL)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -38,7 +40,7 @@ def instruction_action_keyboard(platform_key: str):
         builder.button(text="Скачать Happ для macOS", url=HAPP_MACOS_URL)
 
     builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
-    builder.button(text="Написать в поддержку", callback_data="open_support_from_instructions")
+    builder.button(text="Написать в поддержку", url=SUPPORT_URL)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -50,6 +52,7 @@ def client_instructions_keyboard():
     builder.button(text="Happ для Windows x64", url=HAPP_WINDOWS_URL)
     builder.button(text="Happ для macOS", url=HAPP_MACOS_URL)
     builder.button(text="Открыть сайт Happ", url=HAPP_SITE_URL)
+    builder.button(text="Написать в поддержку", url=SUPPORT_URL)
     builder.adjust(1)
     return builder.as_markup()
 
@@ -70,11 +73,10 @@ def platform_instruction_text(platform_key: str) -> str:
             "2. В боте откройте <b>«Мой доступ»</b>.\n"
             "3. Выберите один из вариантов:\n"
             "• <b>Подключить в Happ</b> — самый быстрый способ\n"
-            "• <b>Показать QR-код</b> — удобно, если нужно импортировать вручную\n"
-            "• <b>Данные для подключения</b> — если хотите вставить ссылку сами\n"
+            "• <b>Показать QR-код</b> — удобно для импорта\n"
+            "• <b>Данные для подключения</b> — если хотите вставить ссылку вручную\n"
             "4. Импортируйте доступ в Happ.\n"
-            "5. Включите подключение.\n\n"
-            "Обычно на iPhone удобнее использовать кнопку подключения или QR-код."
+            "5. Включите подключение."
         ),
         "android": (
             "<b>Android</b>\n\n"
@@ -83,10 +85,9 @@ def platform_instruction_text(platform_key: str) -> str:
             "3. Выберите один из вариантов:\n"
             "• <b>Подключить в Happ</b> — самый быстрый способ\n"
             "• <b>Показать QR-код</b> — обычно это самый удобный вариант\n"
-            "• <b>Данные для подключения</b> — если хотите вставить ссылку сами\n"
+            "• <b>Данные для подключения</b> — если хотите вставить ссылку вручную\n"
             "4. Импортируйте доступ в Happ.\n"
-            "5. Включите подключение.\n\n"
-            "Чаще всего на Android удобнее подключаться по QR-коду."
+            "5. Включите подключение."
         ),
         "windows": (
             "<b>Windows x64</b>\n\n"
@@ -115,6 +116,13 @@ def platform_instruction_text(platform_key: str) -> str:
         ),
     }
     return texts[platform_key]
+
+
+def support_intro_text() -> str:
+    return (
+        "<b>Поддержка Freeth</b>\n\n"
+        "Если что-то не получилось с подключением, напишите в поддержку."
+    )
 
 
 def admin_instructions_text(client_name: str | None) -> str:

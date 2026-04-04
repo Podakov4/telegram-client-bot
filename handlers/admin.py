@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
+from io import StringIO, BytesIO
+import csv
 
+import qrcode
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from io import StringIO, BytesIO
 from sqlalchemy import select, or_, func
-import csv
 
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
@@ -16,9 +17,8 @@ from services.payments import activate_subscription, deactivate_subscription
 from services.subscriptions import get_expiring_clients, get_expired_clients
 from utils.happ_shared import admin_instructions_text, client_instructions_keyboard
 
-
-
 router = Router()
+
 
 
 def is_admin(user_id: int) -> bool:
@@ -41,13 +41,19 @@ def admin_dashboard_keyboard():
 
 def admin_client_actions_keyboard(client_id: int):
     builder = InlineKeyboardBuilder()
+    builder.button(text="Happ ссылка", callback_data=f"admin_happ:{client_id}")
+    builder.button(text="VLESS ссылка", callback_data=f"admin_vless:{client_id}")
+    builder.button(text="QR", callback_data=f"admin_qr:{client_id}")
+    builder.button(text="Все данные клиента", callback_data=f"admin_copy_all:{client_id}")
+    builder.button(text="Отправить доступ заново", callback_data=f"admin_resend_access:{client_id}")
+    builder.button(text="Отправить инструкции", callback_data=f"admin_send_instructions:{client_id}")
     builder.button(text="Продлить 1 месяц", callback_data=f"admin_extend_1:{client_id}")
     builder.button(text="Продлить 3 месяца", callback_data=f"admin_extend_3:{client_id}")
     builder.button(text="Продлить 12 месяцев", callback_data=f"admin_extend_12:{client_id}")
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(1)
+    builder.adjust(2, 2, 1, 1, 1, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -76,7 +82,7 @@ def renewal_keyboard():
     return builder.as_markup()
 
 
-def subscription_actions_keyboard():
+def client_access_actions_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
     builder.button(text="Показать данные для подключения", callback_data="show_vless_link")
@@ -114,7 +120,38 @@ def format_client_card(client: Client) -> str:
         f"Trial использован: {trial_used}\n"
         f"Активно до: {paid_until_text}\n"
         f"Осталось: {days_left_text}\n"
-        f"Ссылка: {'Есть' if client.subscription_link else 'Нет'}"
+        f"Ссылка VLESS: {'Есть' if client.subscription_link else 'Нет'}\n"
+        f"Happ ссылка: {'Есть' if client.happ_subscription_url else 'Нет'}"
+    )
+
+
+def format_admin_client_bundle(client: Client) -> str:
+    active_text = "Да" if client.is_active else "Нет"
+    paid_text = "Да" if client.is_paid else "Нет"
+    trial_used = "Да" if client.notes and "trial_used=true" in client.notes else "Нет"
+    paid_until_text = (
+        client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
+    )
+
+    happ_link = client.happ_subscription_url or "Не подготовлена"
+    vless_link = client.subscription_link or "Не подготовлена"
+
+    return (
+        f"<b>Данные клиента для копирования</b>\n\n"
+        f"ID в БД: <code>{client.id}</code>\n"
+        f"Telegram ID: <code>{client.telegram_id or '—'}</code>\n"
+        f"Имя: {client.full_name or 'Не указано'}\n"
+        f"Логин: <code>{client.login or 'Не указан'}</code>\n"
+        f"XUI email: <code>{client.xui_email or 'Не указан'}</code>\n"
+        f"UUID: <code>{client.xui_uuid or 'Не назначен'}</code>\n"
+        f"Активен: {active_text}\n"
+        f"Оплачено: {paid_text}\n"
+        f"Trial использован: {trial_used}\n"
+        f"Активно до: {paid_until_text}\n\n"
+        f"<b>Happ ссылка</b>\n"
+        f"<code>{happ_link}</code>\n\n"
+        f"<b>VLESS ссылка</b>\n"
+        f"<code>{vless_link}</code>"
     )
 
 
@@ -138,9 +175,7 @@ def format_history_rows(history_rows: list[SubscriptionHistory]) -> str:
 
 async def get_client_by_db_id(client_id: int):
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
+        result = await session.execute(select(Client).where(Client.id == client_id))
         return result.scalar_one_or_none()
 
 
@@ -200,14 +235,60 @@ async def get_trial_clients(limit: int = 20):
         return [c for c in clients if c.notes and "trial_used=true" in c.notes]
 
 
+
+
+async def send_access_again_to_client(bot: Bot, client: Client) -> tuple[bool, str]:
+    if not client.telegram_id:
+        return False, "У клиента не указан Telegram ID."
+
+    if not client.subscription_link and not client.happ_subscription_url:
+        return False, "У клиента пока нет подготовленного доступа."
+
+    name = client.full_name or "пользователь"
+
+    text = (
+        f"Здравствуйте, {name}!\n\n"
+        "Мы отправили ваш доступ Freeth заново.\n\n"
+        "Выберите удобный вариант ниже:\n"
+        "• подключить в Happ\n"
+        "• посмотреть данные для подключения\n"
+        "• получить QR-код\n"
+        "• войти в приложение"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=int(client.telegram_id),
+            text=text,
+            reply_markup=client_access_actions_keyboard(),
+        )
+        return True, "ok"
+    except Exception as exc:
+        return False, str(exc)
+
+
+async def send_instructions_to_client(bot: Bot, client: Client) -> tuple[bool, str]:
+    if not client.telegram_id:
+        return False, "У клиента не указан Telegram ID."
+
+    name = client.full_name or "пользователь"
+
+    text = admin_instructions_text(name)
+
+    try:
+        await bot.send_message(
+            chat_id=int(client.telegram_id),
+            text=text,
+            reply_markup=client_instructions_keyboard(),
+        )
+        return True, "ok"
+    except Exception as exc:
+        return False, str(exc)
+
+
 async def send_expiring_notice(bot: Bot, client: Client) -> bool:
     try:
-        paid_until = (
-            client.paid_until.strftime("%Y-%m-%d %H:%M")
-            if client.paid_until
-            else "скоро"
-        )
-
+        paid_until = client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "скоро"
         text = (
             f"Здравствуйте, {client.full_name or 'пользователь'}!\n\n"
             f"Ваша подписка истекает: {paid_until}\n\n"
@@ -241,6 +322,7 @@ async def send_expired_notice(bot: Bot, client: Client) -> bool:
     except Exception:
         return False
 
+
 async def get_admin_stats():
     now = datetime.utcnow()
     today_start = datetime(now.year, now.month, now.day)
@@ -248,9 +330,7 @@ async def get_admin_stats():
     month_start = now - timedelta(days=30)
 
     async with AsyncSessionLocal() as session:
-        total_clients = await session.scalar(
-            select(func.count()).select_from(Client)
-        )
+        total_clients = await session.scalar(select(func.count()).select_from(Client))
 
         active_clients = await session.scalar(
             select(func.count()).select_from(Client).where(Client.is_active == True)
@@ -316,10 +396,7 @@ async def admin_menu(message: Message):
         await message.answer("Недостаточно прав.")
         return
 
-    await message.answer(
-        "Админ-дашборд:",
-        reply_markup=admin_dashboard_keyboard(),
-    )
+    await message.answer("Админ-дашборд:", reply_markup=admin_dashboard_keyboard())
 
 
 @router.message(Command("find"))
@@ -552,8 +629,8 @@ async def cb_admin_history(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("admin_send_access:"))
-async def cb_admin_send_access(callback: CallbackQuery, bot: Bot):
+@router.callback_query(F.data.startswith("admin_happ:"))
+async def cb_admin_happ(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -561,35 +638,129 @@ async def cb_admin_send_access(callback: CallbackQuery, bot: Bot):
     client_id = int(callback.data.split(":", 1)[1])
     client = await get_client_by_db_id(client_id)
 
-    if client is None or not client.telegram_id:
-        await callback.message.answer("Клиент не найден или у него нет Telegram ID.")
+    if client is None or not client.happ_subscription_url:
+        await callback.message.answer("Happ ссылка не найдена.")
         await callback.answer()
         return
 
-    if not client.subscription_link:
-        await callback.message.answer("У клиента пока нет подготовленного доступа.")
-        await callback.answer()
-        return
-
-    text = (
-        f"Здравствуйте, {client.full_name or 'пользователь'}!\n\n"
-        "Ваш доступ Freeth готов.\n\n"
-        "Откройте раздел ниже и выберите удобный вариант подключения."
+    await callback.message.answer(
+        f"<b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"TG: <code>{client.telegram_id or '—'}</code>\n\n"
+        f"<code>{client.happ_subscription_url}</code>",
+        parse_mode="HTML",
     )
+    await callback.answer()
 
-    try:
-        await bot.send_message(
-            chat_id=int(client.telegram_id),
-            text=text,
-            reply_markup=subscription_actions_keyboard(),
-        )
-    except Exception as exc:
-        await callback.message.answer(f"Не удалось отправить доступ: {exc}")
+
+@router.callback_query(F.data.startswith("admin_vless:"))
+async def cb_admin_vless(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None or not client.subscription_link:
+        await callback.message.answer("Ссылка подключения не найдена.")
         await callback.answer()
         return
 
-    await callback.message.answer("Доступ отправлен клиенту повторно.")
+    await callback.message.answer(
+        f"<b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"TG: <code>{client.telegram_id or '—'}</code>\n\n"
+        f"<code>{client.subscription_link}</code>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_qr:"))
+async def cb_admin_qr(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None or not client.subscription_link:
+        await callback.message.answer("Ссылка подключения не найдена.")
+        await callback.answer()
+        return
+
+    qr = qrcode.QRCode(box_size=10, border=2)
+    qr.add_data(client.subscription_link)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    photo = BufferedInputFile(buffer.getvalue(), filename=f"client_{client.id}_qr.png")
+
+    await callback.message.answer_photo(
+        photo,
+        caption=(
+            f"QR клиента: <b>{client.full_name or 'Без имени'}</b>\n"
+            f"ID: <code>{client.id}</code>"
+        ),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_copy_all:"))
+async def cb_admin_copy_all(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        format_admin_client_bundle(client),
+        parse_mode="HTML",
+    )
     await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("admin_resend_access:"))
+async def cb_admin_resend_access(callback: CallbackQuery, bot: Bot):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    ok, details = await send_access_again_to_client(bot, client)
+    if not ok:
+        await callback.message.answer(
+            f"Не удалось отправить доступ заново.\n\nПричина: {details}"
+        )
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        f"Клиенту отправлен доступ заново: {client.full_name or 'Без имени'} "
+        f"(ID {client.id})."
+    )
+    await callback.answer("Отправлено")
 
 
 @router.callback_query(F.data.startswith("admin_send_instructions:"))
@@ -601,25 +772,24 @@ async def cb_admin_send_instructions(callback: CallbackQuery, bot: Bot):
     client_id = int(callback.data.split(":", 1)[1])
     client = await get_client_by_db_id(client_id)
 
-    if client is None or not client.telegram_id:
-        await callback.message.answer("Клиент не найден или у него нет Telegram ID.")
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
         await callback.answer()
         return
 
-    try:
-        await bot.send_message(
-            chat_id=int(client.telegram_id),
-            text=admin_instructions_text(client.full_name),
-            parse_mode="HTML",
-            reply_markup=client_instructions_keyboard(),
+    ok, details = await send_instructions_to_client(bot, client)
+    if not ok:
+        await callback.message.answer(
+            f"Не удалось отправить инструкции.\n\nПричина: {details}"
         )
-    except Exception as exc:
-        await callback.message.answer(f"Не удалось отправить инструкции: {exc}")
         await callback.answer()
         return
 
-    await callback.message.answer("Инструкции отправлены клиенту.")
-    await callback.answer("Готово")
+    await callback.message.answer(
+        f"Клиенту отправлены инструкции: {client.full_name or 'Без имени'} "
+        f"(ID {client.id})."
+    )
+    await callback.answer("Отправлено")
 
 
 @router.callback_query(F.data.startswith("admin_extend_"))
@@ -671,6 +841,7 @@ async def cb_admin_recreate(callback: CallbackQuery):
         if db_client:
             db_client.xui_uuid = None
             db_client.subscription_link = None
+            db_client.happ_subscription_url = None
             db_client.xui_email = None
             db_client.login = None
             db_client.updated_at = datetime.utcnow()
@@ -716,6 +887,7 @@ async def cb_admin_disable(callback: CallbackQuery):
     )
     await callback.answer("Готово")
 
+
 @router.callback_query(F.data == "admin_dashboard_stats")
 async def cb_admin_dashboard_stats(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -738,6 +910,7 @@ async def cb_admin_dashboard_stats(callback: CallbackQuery):
     )
     await callback.answer()
 
+
 @router.message(Command("export_clients"))
 async def cmd_export_clients(message: Message):
     if not is_admin(message.from_user.id):
@@ -745,9 +918,7 @@ async def cmd_export_clients(message: Message):
         return
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).order_by(Client.id.asc())
-        )
+        result = await session.execute(select(Client).order_by(Client.id.asc()))
         clients = list(result.scalars().all())
 
     if not clients:
@@ -769,6 +940,7 @@ async def cmd_export_clients(message: Message):
         "paid_until",
         "trial_used",
         "subscription_link",
+        "happ_subscription_url",
         "created_at",
         "updated_at",
     ])
@@ -788,6 +960,7 @@ async def cmd_export_clients(message: Message):
             client.paid_until.isoformat(sep=" ") if client.paid_until else "",
             trial_used,
             client.subscription_link or "",
+            client.happ_subscription_url or "",
             client.created_at.isoformat(sep=" ") if client.created_at else "",
             client.updated_at.isoformat(sep=" ") if client.updated_at else "",
         ])
@@ -795,10 +968,7 @@ async def cmd_export_clients(message: Message):
     csv_bytes = output.getvalue().encode("utf-8-sig")
     output.close()
 
-    file = BufferedInputFile(
-        csv_bytes,
-        filename="clients_export.csv",
-    )
+    file = BufferedInputFile(csv_bytes, filename="clients_export.csv")
 
     await message.answer_document(
         file,

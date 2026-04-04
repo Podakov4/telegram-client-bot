@@ -6,10 +6,15 @@ from utils.happ_shared import (
     instruction_action_keyboard,
     instructions_menu_text,
     platform_instruction_text,
-    support_only_keyboard,
+    support_contact_keyboard,
+    support_intro_text,
 )
 
 router = Router()
+
+
+def instructions_keyboard():
+    return device_selection_keyboard()
 
 
 @router.message(F.text == "Как подключить")
@@ -69,8 +74,7 @@ async def open_instructions_from_support(callback: CallbackQuery):
 @router.callback_query(F.data == "open_support_from_instructions")
 async def open_support_from_instructions(callback: CallbackQuery):
     await callback.message.answer(
-        "<b>Поддержка Freeth</b>\n\n"
-        "Если что-то не получилось с подключением, напишите в поддержку.",
-        reply_markup=support_only_keyboard(),
+        support_intro_text(),
+        reply_markup=support_contact_keyboard(),
     )
     await callback.answer()
