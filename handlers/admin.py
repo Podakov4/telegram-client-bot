@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
+from io import StringIO, BytesIO
+import csv
 
+import qrcode
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from io import StringIO, BytesIO
 from sqlalchemy import select, or_, func
-import csv
 
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
@@ -14,8 +15,6 @@ from database.models import Client, SubscriptionHistory
 from services.client_access import create_vpn_access_for_client
 from services.payments import activate_subscription, deactivate_subscription
 from services.subscriptions import get_expiring_clients, get_expired_clients
-
-
 
 router = Router()
 
@@ -40,6 +39,9 @@ def admin_dashboard_keyboard():
 
 def admin_client_actions_keyboard(client_id: int):
     builder = InlineKeyboardBuilder()
+    builder.button(text="Happ ссылка", callback_data=f"admin_happ:{client_id}")
+    builder.button(text="VLESS ссылка", callback_data=f"admin_vless:{client_id}")
+    builder.button(text="QR", callback_data=f"admin_qr:{client_id}")
     builder.button(text="Продлить 1 месяц", callback_data=f"admin_extend_1:{client_id}")
     builder.button(text="Продлить 3 месяца", callback_data=f"admin_extend_3:{client_id}")
     builder.button(text="Продлить 12 месяцев", callback_data=f"admin_extend_12:{client_id}")
@@ -121,6 +123,14 @@ def format_history_rows(history_rows: list[SubscriptionHistory]) -> str:
         )
 
     return "\n\n".join(lines)
+
+
+def format_admin_link_header(client: Client) -> str:
+    return (
+        f"<b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID в БД: <code>{client.id}</code>\n"
+        f"Telegram ID: <code>{client.telegram_id or '—'}</code>"
+    )
 
 
 async def get_client_by_db_id(client_id: int):
@@ -227,6 +237,7 @@ async def send_expired_notice(bot: Bot, client: Client) -> bool:
         return True
     except Exception:
         return False
+
 
 async def get_admin_stats():
     now = datetime.utcnow()
@@ -516,6 +527,118 @@ async def cb_admin_open(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("admin_happ:"))
+async def cb_admin_happ(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":")[1])
+    client = await get_client_by_db_id(client_id)
+
+    if not client:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    if not getattr(client, "happ_subscription_url", None):
+        await callback.message.answer(
+            f"{format_admin_link_header(client)}\n\nСсылка Happ пока не подготовлена.",
+            parse_mode="HTML",
+            reply_markup=admin_client_actions_keyboard(client.id),
+        )
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        f"{format_admin_link_header(client)}\n\n"
+        f"<b>Happ ссылка</b>\n"
+        f"<code>{client.happ_subscription_url}</code>",
+        parse_mode="HTML",
+        reply_markup=admin_client_actions_keyboard(client.id),
+    )
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("admin_vless:"))
+async def cb_admin_vless(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":")[1])
+    client = await get_client_by_db_id(client_id)
+
+    if not client:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    if not client.subscription_link:
+        await callback.message.answer(
+            f"{format_admin_link_header(client)}\n\nСсылка подключения пока не подготовлена.",
+            parse_mode="HTML",
+            reply_markup=admin_client_actions_keyboard(client.id),
+        )
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        f"{format_admin_link_header(client)}\n\n"
+        f"<b>VLESS ссылка</b>\n"
+        f"<code>{client.subscription_link}</code>",
+        parse_mode="HTML",
+        reply_markup=admin_client_actions_keyboard(client.id),
+    )
+    await callback.answer("Готово")
+
+
+@router.callback_query(F.data.startswith("admin_qr:"))
+async def cb_admin_qr(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":")[1])
+    client = await get_client_by_db_id(client_id)
+
+    if not client:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    if not client.subscription_link:
+        await callback.message.answer(
+            f"{format_admin_link_header(client)}\n\nСсылка подключения пока не подготовлена.",
+            parse_mode="HTML",
+            reply_markup=admin_client_actions_keyboard(client.id),
+        )
+        await callback.answer()
+        return
+
+    qr = qrcode.QRCode(box_size=10, border=2)
+    qr.add_data(client.subscription_link)
+    qr.make(fit=True)
+
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    photo = BufferedInputFile(
+        buffer.getvalue(),
+        filename=f"client_{client.id}_access_qr.png",
+    )
+
+    await callback.message.answer_photo(
+        photo,
+        caption=f"{format_admin_link_header(client)}\n\nQR-код для подключения.",
+        parse_mode="HTML",
+        reply_markup=admin_client_actions_keyboard(client.id),
+    )
+    await callback.answer("Готово")
+
+
 @router.callback_query(F.data.startswith("admin_history:"))
 async def cb_admin_history(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -585,7 +708,7 @@ async def cb_admin_recreate(callback: CallbackQuery):
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Client).where(Client.id == client_id))
         db_client = result.scalar_one_or_none()
-        if db_client:
+       if db_client:
             db_client.xui_uuid = None
             db_client.subscription_link = None
             db_client.xui_email = None
@@ -633,6 +756,7 @@ async def cb_admin_disable(callback: CallbackQuery):
     )
     await callback.answer("Готово")
 
+
 @router.callback_query(F.data == "admin_dashboard_stats")
 async def cb_admin_dashboard_stats(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -654,6 +778,7 @@ async def cb_admin_dashboard_stats(callback: CallbackQuery):
         reply_markup=admin_dashboard_keyboard(),
     )
     await callback.answer()
+
 
 @router.message(Command("export_clients"))
 async def cmd_export_clients(message: Message):
