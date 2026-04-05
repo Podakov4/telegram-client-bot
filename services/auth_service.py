@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-import logging
 import jwt
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from services.email_sender import send_login_code_email
 
 from config import SECRET_KEY
-from database.models import AppSession, Client, Device, EmailLoginCode, LoginCode
+from database.models import (
+    AppSession,
+    Client,
+    ClientVpnAccess,
+    Device,
+    EmailBindingCode,
+    EmailLoginCode,
+    LoginCode,
+    SubscriptionHistory,
+    YooKassaPayment,
+)
+from services.email_sender import send_login_code_email
 
 ACCESS_TOKEN_TTL_MINUTES = 30
 REFRESH_TOKEN_TTL_DAYS = 30
@@ -46,6 +56,14 @@ class RequestEmailCodeResult:
     code: str
     expires_at: datetime
     cooldown_seconds: int
+
+
+@dataclass
+class ConfirmEmailBindingResult:
+    client: Client
+    merged: bool
+    source_client_id: Optional[int] = None
+    target_client_id: Optional[int] = None
 
 
 class AuthError(Exception):
@@ -126,6 +144,116 @@ class AuthService:
         return payload
 
     @staticmethod
+    def _max_datetime(first: Optional[datetime], second: Optional[datetime]) -> Optional[datetime]:
+        if first and second:
+            return max(first, second)
+        return first or second
+
+    @staticmethod
+    def _merge_status(target_status: Optional[str], source_status: Optional[str]) -> str:
+        statuses = {value for value in [target_status, source_status] if value}
+        if "blocked" in statuses:
+            return "blocked"
+        if "deleted" in statuses:
+            return "deleted"
+        return target_status or source_status or "active"
+
+    @staticmethod
+    def _parse_notes(notes: Optional[str]) -> tuple[dict[str, str], list[str]]:
+        data: dict[str, str] = {}
+        raw_lines: list[str] = []
+
+        if not notes:
+            return data, raw_lines
+
+        for line in notes.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if "=" in stripped:
+                key, value = stripped.split("=", 1)
+                data[key.strip()] = value.strip()
+            else:
+                raw_lines.append(stripped)
+
+        return data, raw_lines
+
+    @staticmethod
+    def _dump_notes(data: dict[str, str], raw_lines: list[str]) -> Optional[str]:
+        lines: list[str] = []
+        for key in sorted(data.keys()):
+            lines.append(f"{key}={data[key]}")
+        lines.extend(raw_lines)
+        return "\n".join(lines) if lines else None
+
+    @staticmethod
+    def _merge_notes(target_notes: Optional[str], source_notes: Optional[str]) -> Optional[str]:
+        target_data, target_raw = AuthService._parse_notes(target_notes)
+        source_data, source_raw = AuthService._parse_notes(source_notes)
+
+        merged = dict(source_data)
+        merged.update(target_data)
+
+        source_trial = source_data.get("trial_used") == "true"
+        target_trial = target_data.get("trial_used") == "true"
+        if source_trial or target_trial:
+            merged["trial_used"] = "true"
+
+        max_devices_values: list[int] = []
+        for candidate in [source_data.get("max_devices"), target_data.get("max_devices")]:
+            if candidate and candidate.isdigit():
+                max_devices_values.append(int(candidate))
+        if max_devices_values:
+            merged["max_devices"] = str(max(max_devices_values))
+
+        if target_data.get("plan_code"):
+            merged["plan_code"] = target_data["plan_code"]
+        elif source_data.get("plan_code"):
+            merged["plan_code"] = source_data["plan_code"]
+
+        raw_lines: list[str] = []
+        seen = set()
+        for line in source_raw + target_raw:
+            if line not in seen:
+                seen.add(line)
+                raw_lines.append(line)
+
+        return AuthService._dump_notes(merged, raw_lines)
+
+    @staticmethod
+    async def _sync_legacy_access_fields(
+        db: AsyncSession,
+        client: Client,
+        *,
+        preserve_existing_if_no_pairs: bool = True,
+    ) -> None:
+        result = await db.execute(
+            select(ClientVpnAccess)
+            .where(
+                ClientVpnAccess.client_id == client.id,
+                ClientVpnAccess.is_enabled.is_(True),
+            )
+            .order_by(ClientVpnAccess.node_id.asc(), ClientVpnAccess.id.asc())
+        )
+        pairs = list(result.scalars().all())
+
+        if not pairs:
+            if not preserve_existing_if_no_pairs:
+                client.login = None
+                client.xui_uuid = None
+                client.xui_email = None
+                client.subscription_link = None
+            client.updated_at = AuthService._utcnow()
+            return
+
+        primary = pairs[0]
+        client.login = primary.xui_email or client.login
+        client.xui_uuid = primary.xui_uuid
+        client.xui_email = primary.xui_email
+        client.subscription_link = primary.subscription_link
+        client.updated_at = AuthService._utcnow()
+
+    @staticmethod
     async def create_login_code(
         db: AsyncSession,
         telegram_id: str,
@@ -190,7 +318,6 @@ class AuthService:
         )
         client = client_result.scalar_one_or_none()
 
-        # Инвалидируем все старые неиспользованные коды этого email
         await db.execute(
             update(EmailLoginCode)
             .where(
@@ -203,6 +330,65 @@ class AuthService:
         code = AuthService._generate_email_code()
         row = EmailLoginCode(
             client_id=client.id if client else None,
+            email=normalized,
+            code_hash=AuthService._hash_token(code),
+            expires_at=now + timedelta(minutes=EMAIL_LOGIN_CODE_TTL_MINUTES),
+            attempts=0,
+        )
+        db.add(row)
+        await db.commit()
+        await db.refresh(row)
+
+        return RequestEmailCodeResult(
+            email=normalized,
+            code=code,
+            expires_at=row.expires_at,
+            cooldown_seconds=EMAIL_LOGIN_CODE_COOLDOWN_SECONDS,
+        )
+
+    @staticmethod
+    async def request_email_binding_code(
+        db: AsyncSession,
+        client_id: int,
+        email: str,
+    ) -> RequestEmailCodeResult:
+        normalized = AuthService._normalize_email(email)
+        now = AuthService._utcnow()
+
+        result = await db.execute(select(Client).where(Client.id == client_id))
+        client = result.scalar_one_or_none()
+        if not client:
+            raise AuthError("Client not found")
+
+        if client.email == normalized:
+            raise AuthError("Этот email уже привязан к вашему аккаунту.")
+
+        recent_result = await db.execute(
+            select(EmailBindingCode)
+            .where(
+                EmailBindingCode.client_id == client.id,
+                EmailBindingCode.email == normalized,
+                EmailBindingCode.created_at >= now - timedelta(seconds=EMAIL_LOGIN_CODE_COOLDOWN_SECONDS),
+            )
+            .order_by(EmailBindingCode.id.desc())
+            .limit(1)
+        )
+        recent = recent_result.scalars().first()
+        if recent:
+            raise AuthError("Код уже отправлен. Попробуйте чуть позже.")
+
+        await db.execute(
+            update(EmailBindingCode)
+            .where(
+                EmailBindingCode.client_id == client.id,
+                EmailBindingCode.consumed_at.is_(None),
+            )
+            .values(consumed_at=now)
+        )
+
+        code = AuthService._generate_email_code()
+        row = EmailBindingCode(
+            client_id=client.id,
             email=normalized,
             code_hash=AuthService._hash_token(code),
             expires_at=now + timedelta(minutes=EMAIL_LOGIN_CODE_TTL_MINUTES),
@@ -258,6 +444,276 @@ class AuthService:
         await db.commit()
         await db.refresh(client)
         return client
+
+    @staticmethod
+    async def merge_clients(
+        db: AsyncSession,
+        target_client_id: int,
+        source_client_id: int,
+    ) -> Client:
+        if target_client_id == source_client_id:
+            result = await db.execute(select(Client).where(Client.id == target_client_id))
+            client = result.scalar_one_or_none()
+            if not client:
+                raise AuthError("Client not found")
+            return client
+
+        target_result = await db.execute(select(Client).where(Client.id == target_client_id))
+        target = target_result.scalar_one_or_none()
+        if not target:
+            raise AuthError("Target client not found")
+
+        source_result = await db.execute(select(Client).where(Client.id == source_client_id))
+        source = source_result.scalar_one_or_none()
+        if not source:
+            raise AuthError("Source client not found")
+
+        if target.telegram_id and source.telegram_id and target.telegram_id != source.telegram_id:
+            raise AuthError("Нельзя объединить два разных Telegram-аккаунта.")
+
+        source_telegram_id = source.telegram_id
+        source_happ_subscription_token = source.happ_subscription_token
+        source_happ_subscription_url = source.happ_subscription_url
+        source_legacy_login = source.login
+        source_legacy_xui_uuid = source.xui_uuid
+        source_legacy_xui_email = source.xui_email
+        source_legacy_subscription_link = source.subscription_link
+        source_full_name = source.full_name
+        source_default_language = source.default_language
+        source_created_via = source.created_via
+        source_last_login_at = source.last_login_at
+        source_paid_until = source.paid_until
+        source_is_paid = bool(source.is_paid)
+        source_is_active = bool(source.is_active)
+        source_status = source.status
+        source_notes = source.notes
+        source_email = source.email
+
+        devices_result = await db.execute(select(Device).where(Device.client_id == source.id))
+        for device in devices_result.scalars().all():
+            device.client_id = target.id
+
+        sessions_result = await db.execute(select(AppSession).where(AppSession.client_id == source.id))
+        for session in sessions_result.scalars().all():
+            session.client_id = target.id
+
+        login_codes_result = await db.execute(select(LoginCode).where(LoginCode.client_id == source.id))
+        for login_code in login_codes_result.scalars().all():
+            login_code.client_id = target.id
+
+        email_login_codes_result = await db.execute(
+            select(EmailLoginCode).where(EmailLoginCode.client_id == source.id)
+        )
+        for email_login_code in email_login_codes_result.scalars().all():
+            email_login_code.client_id = target.id
+
+        email_binding_codes_result = await db.execute(
+            select(EmailBindingCode).where(EmailBindingCode.client_id == source.id)
+        )
+        for email_binding_code in email_binding_codes_result.scalars().all():
+            email_binding_code.client_id = target.id
+
+        history_result = await db.execute(
+            select(SubscriptionHistory).where(SubscriptionHistory.client_id == source.id)
+        )
+        for history_row in history_result.scalars().all():
+            history_row.client_id = target.id
+
+        payments_result = await db.execute(
+            select(YooKassaPayment).where(YooKassaPayment.client_id == source.id)
+        )
+        for payment in payments_result.scalars().all():
+            payment.client_id = target.id
+            if not payment.telegram_id and source_telegram_id:
+                payment.telegram_id = source_telegram_id
+
+        source_accesses_result = await db.execute(
+            select(ClientVpnAccess)
+            .where(ClientVpnAccess.client_id == source.id)
+            .order_by(ClientVpnAccess.node_id.asc(), ClientVpnAccess.id.asc())
+        )
+        for source_access in source_accesses_result.scalars().all():
+            target_access_result = await db.execute(
+                select(ClientVpnAccess).where(
+                    ClientVpnAccess.client_id == target.id,
+                    ClientVpnAccess.node_id == source_access.node_id,
+                )
+            )
+            target_access = target_access_result.scalar_one_or_none()
+
+            if target_access:
+                if not target_access.xui_uuid and source_access.xui_uuid:
+                    target_access.xui_uuid = source_access.xui_uuid
+                if not target_access.xui_email and source_access.xui_email:
+                    target_access.xui_email = source_access.xui_email
+                if not target_access.subscription_link and source_access.subscription_link:
+                    target_access.subscription_link = source_access.subscription_link
+                target_access.is_enabled = bool(target_access.is_enabled or source_access.is_enabled)
+                target_access.updated_at = AuthService._utcnow()
+                await db.delete(source_access)
+            else:
+                source_access.client_id = target.id
+                source_access.updated_at = AuthService._utcnow()
+
+        source.telegram_id = None
+        source.email = None
+        source.login = None
+        source.xui_uuid = None
+        source.xui_email = None
+        source.subscription_link = None
+        source.happ_subscription_token = None
+        source.happ_subscription_url = None
+        source.updated_at = AuthService._utcnow()
+
+        await db.flush()
+
+        if source_telegram_id and not target.telegram_id:
+            target.telegram_id = source_telegram_id
+
+        if not target.email and source_email:
+            target.email = source_email
+
+        if source_full_name and (not target.full_name or target.created_via == "email"):
+            target.full_name = source_full_name
+
+        if not target.default_language and source_default_language:
+            target.default_language = source_default_language
+
+        target.last_login_at = AuthService._max_datetime(target.last_login_at, source_last_login_at)
+        target.paid_until = AuthService._max_datetime(target.paid_until, source_paid_until)
+        target.is_paid = bool(target.is_paid or source_is_paid)
+        target.is_active = bool(target.is_active or source_is_active)
+        target.status = AuthService._merge_status(target.status, source_status)
+        target.notes = AuthService._merge_notes(target.notes, source_notes)
+
+        if target.created_via != source_created_via and source_created_via:
+            target.created_via = "merged"
+        elif not target.created_via and source_created_via:
+            target.created_via = source_created_via
+
+        if not target.happ_subscription_token and source_happ_subscription_token:
+            target.happ_subscription_token = source_happ_subscription_token
+            target.happ_subscription_url = source_happ_subscription_url
+
+        if not target.login and source_legacy_login:
+            target.login = source_legacy_login
+        if not target.xui_uuid and source_legacy_xui_uuid:
+            target.xui_uuid = source_legacy_xui_uuid
+        if not target.xui_email and source_legacy_xui_email:
+            target.xui_email = source_legacy_xui_email
+        if not target.subscription_link and source_legacy_subscription_link:
+            target.subscription_link = source_legacy_subscription_link
+
+        await AuthService._sync_legacy_access_fields(
+            db=db,
+            client=target,
+            preserve_existing_if_no_pairs=True,
+        )
+
+        target.updated_at = AuthService._utcnow()
+
+        logger.info(
+            "Merging clients: source_client_id=%s -> target_client_id=%s email=%s telegram_id=%s",
+            source_client_id,
+            target_client_id,
+            target.email,
+            target.telegram_id,
+        )
+
+        await db.delete(source)
+        await db.flush()
+
+        return target
+
+    @staticmethod
+    async def confirm_email_binding_code(
+        db: AsyncSession,
+        client_id: int,
+        email: str,
+        code: str,
+    ) -> ConfirmEmailBindingResult:
+        normalized = AuthService._normalize_email(email)
+        now = AuthService._utcnow()
+
+        client_result = await db.execute(select(Client).where(Client.id == client_id))
+        current_client = client_result.scalar_one_or_none()
+        if not current_client:
+            raise AuthError("Client not found")
+
+        binding_code_result = await db.execute(
+            select(EmailBindingCode)
+            .where(
+                EmailBindingCode.client_id == current_client.id,
+                EmailBindingCode.email == normalized,
+                EmailBindingCode.consumed_at.is_(None),
+            )
+            .order_by(EmailBindingCode.id.desc())
+            .limit(1)
+        )
+        binding_row = binding_code_result.scalars().first()
+
+        if not binding_row:
+            raise InvalidLoginCodeError("Код подтверждения не найден")
+
+        if binding_row.expires_at < now:
+            binding_row.consumed_at = now
+            await db.commit()
+            raise ExpiredLoginCodeError("Код подтверждения истек")
+
+        expected_hash = AuthService._hash_token(code.strip())
+        if binding_row.code_hash != expected_hash:
+            binding_row.attempts += 1
+            await db.commit()
+            raise InvalidLoginCodeError("Неверный код подтверждения")
+
+        email_client_result = await db.execute(
+            select(Client).where(Client.email == normalized)
+        )
+        email_client = email_client_result.scalar_one_or_none()
+
+        merged = False
+        source_client_id: Optional[int] = None
+        target_client_id: Optional[int] = None
+
+        if email_client and email_client.id != current_client.id:
+            if email_client.telegram_id and current_client.telegram_id and email_client.telegram_id != current_client.telegram_id:
+                raise AuthError("Этот email уже привязан к другому Telegram-аккаунту.")
+
+            source_client_id = current_client.id
+            target_client_id = email_client.id
+            current_client = await AuthService.merge_clients(
+                db=db,
+                target_client_id=email_client.id,
+                source_client_id=current_client.id,
+            )
+            current_client.email = normalized
+            merged = True
+        else:
+            current_client.email = normalized
+            current_client.updated_at = now
+            target_client_id = current_client.id
+
+        binding_row.client_id = current_client.id
+        binding_row.consumed_at = now
+        current_client.last_login_at = AuthService._max_datetime(current_client.last_login_at, now)
+
+        await db.commit()
+        await db.refresh(current_client)
+
+        logger.info(
+            "Email binding confirmed: client_id=%s email=%s merged=%s source_client_id=%s",
+            current_client.id,
+            normalized,
+            merged,
+            source_client_id,
+        )
+
+        return ConfirmEmailBindingResult(
+            client=current_client,
+            merged=merged,
+            source_client_id=source_client_id,
+            target_client_id=target_client_id,
+        )
 
     @staticmethod
     async def login_by_email_code(

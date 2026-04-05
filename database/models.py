@@ -84,6 +84,11 @@ class Client(Base):
         back_populates="client",
         cascade="all, delete-orphan",
     )
+    email_binding_codes = relationship(
+        "EmailBindingCode",
+        back_populates="client",
+        cascade="all, delete-orphan",
+    )
     app_sessions = relationship(
         "AppSession",
         back_populates="client",
@@ -251,6 +256,23 @@ class EmailLoginCode(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     client = relationship("Client", back_populates="email_login_codes")
+
+
+class EmailBindingCode(Base):
+    __tablename__ = "email_binding_codes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey("clients.id"), nullable=False, index=True)
+
+    email = Column(String, nullable=False, index=True)
+    code_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    consumed_at = Column(DateTime, nullable=True)
+    attempts = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    client = relationship("Client", back_populates="email_binding_codes")
 
 
 class AppSession(Base):

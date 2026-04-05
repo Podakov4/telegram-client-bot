@@ -1,10 +1,13 @@
 from datetime import datetime
 from io import BytesIO
+import re
 
 import qrcode
-from aiogram import Router, F
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 
@@ -18,12 +21,24 @@ from database.db import AsyncSessionLocal
 from database.models import Client
 from handlers.instructions import instructions_keyboard
 from keyboards.reply import main_reply_keyboard
-from services.auth_service import AuthError, AuthService
+from services.auth_service import (
+    AuthError,
+    AuthService,
+    ExpiredLoginCodeError,
+    InvalidLoginCodeError,
+)
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.payments import activate_trial_subscription, create_checkout_payment
 from services.subscriptions import get_client_subscription_status, get_expiring_clients
 
 router = Router()
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class EmailBindingStates(StatesGroup):
+    waiting_for_email = State()
+    waiting_for_code = State()
 
 
 def client_has_trial_used(client: Client | None) -> bool:
@@ -100,11 +115,19 @@ def access_actions_keyboard(client: Client):
             builder.button(text="Показать QR-код", callback_data="show_vless_qr")
         builder.button(text="Войти в приложение", callback_data="open_app_login_menu")
         builder.button(text="Мои устройства", callback_data="show_my_devices")
+        builder.button(
+            text="Изменить email" if client.email else "Привязать email",
+            callback_data="bind_email_start",
+        )
         builder.button(text="Продлить доступ", callback_data="open_payment_menu")
     else:
         if not trial_used:
             builder.button(text="Попробовать 7 дней", callback_data="activate_trial")
         builder.button(text="Продлить доступ", callback_data="open_payment_menu")
+        builder.button(
+            text="Изменить email" if client.email else "Привязать email",
+            callback_data="bind_email_start",
+        )
         builder.button(text="Как подключить", callback_data="open_instructions_from_access")
 
     builder.adjust(1)
@@ -123,6 +146,10 @@ def trial_onboarding_keyboard(client: Client):
         )
     builder.button(text="Как подключить", callback_data="open_instructions_from_access")
     builder.button(text="Войти в приложение", callback_data="open_app_login_menu")
+    builder.button(
+        text="Изменить email" if client.email else "Привязать email",
+        callback_data="bind_email_start",
+    )
     builder.adjust(1)
     return builder.as_markup()
 
@@ -191,6 +218,14 @@ def format_device_line(device) -> str:
         f"  Последняя активность: {last_seen}\n"
         f"  ID: <code>{device.id}</code>"
     )
+
+
+def _normalize_email(value: str) -> str:
+    return value.strip().lower()
+
+
+def _is_valid_email(value: str) -> bool:
+    return bool(EMAIL_RE.match(_normalize_email(value)))
 
 
 async def get_client_by_telegram_id(telegram_id: str):
@@ -369,6 +404,127 @@ async def send_app_login_menu_message(message: Message):
     )
 
 
+@router.message(EmailBindingStates.waiting_for_email)
+async def process_email_binding_email(message: Message, state: FSMContext):
+    if (message.text or "").strip().lower() == "отмена":
+        await state.clear()
+        client = await get_client_by_telegram_id(str(message.from_user.id))
+        await message.answer(
+            "Привязка email отменена.",
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+        )
+        return
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+    if client is None:
+        await state.clear()
+        await message.answer("Профиль пока не найден. Нажмите /start")
+        return
+
+    email = _normalize_email(message.text or "")
+    if not _is_valid_email(email):
+        await message.answer(
+            "Введите корректный email.\n\n"
+            "Например: user@example.com\n"
+            "Или напишите «Отмена»."
+        )
+        return
+
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await AuthService.request_email_binding_code(
+                db=session,
+                client_id=client.id,
+                email=email,
+            )
+        except AuthError as exc:
+            await message.answer(str(exc))
+            return
+
+    await AuthService.send_email_login_code(result.email, result.code)
+
+    await state.update_data(binding_email=result.email)
+    await state.set_state(EmailBindingStates.waiting_for_code)
+
+    await message.answer(
+        "Код подтверждения отправлен на email.\n\n"
+        "Введите 6 цифр из письма.\n"
+        "Если хотите прервать, напишите «Отмена»."
+    )
+
+
+@router.message(EmailBindingStates.waiting_for_code)
+async def process_email_binding_code(message: Message, state: FSMContext):
+    if (message.text or "").strip().lower() == "отмена":
+        await state.clear()
+        client = await get_client_by_telegram_id(str(message.from_user.id))
+        await message.answer(
+            "Подтверждение email отменено.",
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+        )
+        return
+
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+    if client is None:
+        await state.clear()
+        await message.answer("Профиль пока не найден. Нажмите /start")
+        return
+
+    data = await state.get_data()
+    email = data.get("binding_email")
+    code = (message.text or "").strip()
+
+    if not email:
+        await state.clear()
+        await message.answer("Сессия подтверждения устарела. Начните заново из раздела «Мой доступ».")
+        return
+
+    if not code.isdigit() or len(code) != 6:
+        await message.answer(
+            "Введите 6 цифр из письма.\n"
+            "Если хотите прервать, напишите «Отмена»."
+        )
+        return
+
+    async with AsyncSessionLocal() as session:
+        try:
+            result = await AuthService.confirm_email_binding_code(
+                db=session,
+                client_id=client.id,
+                email=email,
+                code=code,
+            )
+        except ExpiredLoginCodeError as exc:
+            await message.answer(str(exc))
+            return
+        except InvalidLoginCodeError as exc:
+            await message.answer(str(exc))
+            return
+        except AuthError as exc:
+            await message.answer(str(exc))
+            return
+
+    await state.clear()
+
+    updated_client = await get_client_by_telegram_id(str(message.from_user.id))
+    if updated_client is None:
+        await message.answer("Email подтвержден, но профиль не найден. Нажмите /start")
+        return
+
+    if result.merged:
+        await message.answer(
+            "Email подтвержден. Аккаунт Telegram объединен с существующим аккаунтом приложения.",
+            reply_markup=build_reply_keyboard_for_client(updated_client, message.from_user.id),
+        )
+    else:
+        await message.answer(
+            "Email подтвержден и привязан к вашему аккаунту.",
+            reply_markup=build_reply_keyboard_for_client(updated_client, message.from_user.id),
+        )
+
+    await send_access_message(message, updated_client)
+
+
 @router.message(Command("profile"))
 @router.message(Command("subscription"))
 @router.message(F.text == "Мой доступ")
@@ -411,6 +567,29 @@ async def cb_show_my_devices(callback: CallbackQuery):
         return
 
     await send_devices_callback_message(callback, client)
+
+
+@router.callback_query(F.data == "bind_email_start")
+async def cb_bind_email_start(callback: CallbackQuery, state: FSMContext):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None:
+        await callback.message.answer("Профиль пока не найден. Нажмите /start")
+        await callback.answer()
+        return
+
+    await state.clear()
+    await state.set_state(EmailBindingStates.waiting_for_email)
+
+    current_email = client.email or "не привязан"
+    await callback.message.answer(
+        "<b>Привязка email</b>\n\n"
+        f"Текущий email: <b>{current_email}</b>\n\n"
+        "Введите email, который хотите привязать к аккаунту.\n"
+        "После этого я отправлю код подтверждения на почту.\n\n"
+        "Чтобы отменить, напишите «Отмена».",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("revoke_device:"))
@@ -736,6 +915,7 @@ async def help_message(message: Message):
             "• Показать QR-код\n"
             "• Войти в приложение\n"
             "• Мои устройства\n"
+            "• Привязать или изменить email\n"
             "• Продлить доступ\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
@@ -762,6 +942,7 @@ async def help_message(message: Message):
             "• Показать QR-код\n"
             "• Войти в приложение\n"
             "• Мои устройства\n"
+            "• Привязать или изменить email\n"
             "• Продлить доступ",
             reply_markup=build_reply_keyboard_for_client(
                 await get_client_by_telegram_id(str(message.from_user.id)),
