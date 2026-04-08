@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from config import BOT_TOKEN
 from database.db import AsyncSessionLocal, get_db
@@ -434,8 +435,21 @@ async def update_my_profile(
     else:
         current_client.email = email.lower()
 
-    await db.commit()
-    await db.refresh(current_client)
+    try:
+        await db.commit()
+        await db.refresh(current_client)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Этот email уже привязан к другому аккаунту.",
+        )
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось сохранить email.",
+        )
 
     return {
         "ok": True,
