@@ -20,10 +20,13 @@ def main_reply_keyboard(
             KeyboardButton(text=primary_action),
             KeyboardButton(text="Поддержка"),
         ],
+        [
+            KeyboardButton(text="Помощь"),
+        ],
     ]
 
     if user_id in ADMIN_IDS:
-        rows.append([KeyboardButton(text="Помощь")])
+        rows.append([KeyboardButton(text="Админ")])
 
     return ReplyKeyboardMarkup(
         keyboard=rows,

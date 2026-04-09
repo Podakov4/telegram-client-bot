@@ -1,4 +1,5 @@
 from aiogram import Router, F
+from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -35,8 +36,8 @@ def support_docs_keyboard():
     return builder.as_markup()
 
 
+@router.message(Command("support"))
 @router.message(F.text == "Поддержка")
-@router.message(F.text == "Помощь")
 async def support_menu(message: Message):
     await message.answer(
         "<b>Поддержка Freeth</b>\n\n"
@@ -78,6 +79,8 @@ async def support_faq(callback: CallbackQuery):
         "• Показать данные для подключения\n\n"
         "<b>Как войти в приложение?</b>\n"
         "Откройте <b>«Мой доступ»</b> → <b>«Войти в приложение»</b>.\n\n"
+        "<b>Я удалил переписку и не вижу кнопку запуска</b>\n"
+        "Отправьте команду <code>/start</code>, затем откройте <b>«Мой доступ»</b>.\n\n"
         "<b>Не получается подключиться</b>\n"
         "Откройте <b>«Как подключить»</b> или напишите в поддержку.\n\n"
         "<b>Оплатил, но доступ не появился</b>\n"

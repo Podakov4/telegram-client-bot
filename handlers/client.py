@@ -526,6 +526,7 @@ async def process_email_binding_code(message: Message, state: FSMContext):
 
 
 @router.message(Command("profile"))
+@router.message(Command("access"))
 @router.message(Command("subscription"))
 @router.message(F.text == "Мой доступ")
 @router.message(F.text == "Мой профиль")
@@ -552,6 +553,7 @@ async def cmd_devices(message: Message):
     await send_devices_message(message, client)
 
 
+@router.message(Command("login"))
 @router.message(F.text == "Войти в приложение")
 async def app_login_menu_from_reply(message: Message):
     await send_app_login_menu_message(message)
@@ -900,52 +902,48 @@ async def cmd_preview_expiring(message: Message):
         )
 
 
+@router.message(Command("help"))
 @router.message(F.text == "Помощь")
 async def help_message(message: Message):
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
-            "Доступные действия:\n"
-            "• Мой доступ\n"
-            "• Как подключить\n"
-            "• Попробовать 7 дней / Продлить доступ\n"
-            "• Поддержка\n\n"
-            "В разделе «Мой доступ» доступны:\n"
-            "• Подключить в Happ\n"
-            "• Показать данные для подключения\n"
-            "• Показать QR-код\n"
-            "• Войти в приложение\n"
-            "• Мои устройства\n"
-            "• Привязать или изменить email\n"
-            "• Продлить доступ\n\n"
+            "Что можно сделать в боте:\n\n"
+            "• <b>Мой доступ</b> — статус, подключение и вход в приложение\n"
+            "• <b>Войти в приложение</b> — получить код входа\n"
+            "• <b>Мои устройства</b> — посмотреть и отключить устройства\n"
+            "• <b>Продлить доступ</b> — открыть оплату и подписку\n"
+            "• <b>Поддержка</b> — связаться с нами\n\n"
+            "Если после очистки чата не видно кнопки запуска:\n"
+            "1. Отправьте <code>/start</code>\n"
+            "2. Откройте <b>«Мой доступ»</b>\n"
+            "3. Для входа в приложение нажмите <b>«Войти в приложение»</b>\n\n"
             "Команды администратора:\n"
-            "• /admin — открыть админ-меню\n"
-            "• /find [telegram_id | id | имя] — найти клиента\n"
-            "• /export_clients — выгрузить клиентов в CSV\n"
-            "• /news — создать новость и сделать рассылку\n"
-            "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
-            "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
-            reply_markup=build_reply_keyboard_for_client(
-                await get_client_by_telegram_id(str(message.from_user.id)),
-                message.from_user.id,
-            ),
+            "• <code>/admin</code> — открыть админ-меню\n"
+            "• <code>/find [telegram_id | id | имя]</code> — найти клиента\n"
+            "• <code>/export_clients</code> — выгрузить клиентов в CSV\n"
+            "• <code>/news</code> — создать новость и сделать рассылку\n"
+            "• <code>/check_expiring</code> — показать подписки, истекающие в ближайшие 3 дня\n"
+            "• <code>/preview_expiring</code> — посмотреть напоминание о продлении",
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
         )
     else:
         await message.answer(
-            "Доступные действия:\n"
-            "• Мой доступ\n"
-            "• Как подключить\n"
-            "• Попробовать 7 дней / Продлить доступ\n"
-            "• Поддержка\n\n"
-            "В разделе «Мой доступ» доступны:\n"
-            "• Подключить в Happ\n"
-            "• Показать данные для подключения\n"
-            "• Показать QR-код\n"
-            "• Войти в приложение\n"
-            "• Мои устройства\n"
-            "• Привязать или изменить email\n"
-            "• Продлить доступ",
-            reply_markup=build_reply_keyboard_for_client(
-                await get_client_by_telegram_id(str(message.from_user.id)),
-                message.from_user.id,
-            ),
+            "Что можно сделать в боте:\n\n"
+            "• <b>Мой доступ</b> — статус, подключение и вход в приложение\n"
+            "• <b>Как подключить</b> — инструкции для устройства\n"
+            "• <b>Продлить доступ</b> — открыть оплату и подписку\n"
+            "• <b>Поддержка</b> — связаться с нами\n\n"
+            "Команды:\n"
+            "• <code>/start</code> — запустить бота заново\n"
+            "• <code>/access</code> — открыть раздел доступа\n"
+            "• <code>/login</code> — получить код входа в приложение\n"
+            "• <code>/subscription</code> — открыть раздел доступа и продления\n"
+            "• <code>/help</code> — показать эту подсказку\n\n"
+            "Если после очистки чата не видно кнопки запуска:\n"
+            "1. Отправьте <code>/start</code>\n"
+            "2. Откройте <b>«Мой доступ»</b>\n"
+            "3. Для входа в приложение нажмите <b>«Войти в приложение»</b>",
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
         )
