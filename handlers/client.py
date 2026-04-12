@@ -3,13 +3,13 @@ from io import BytesIO
 import re
 
 import qrcode
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from config import (
     ADMIN_IDS,
@@ -34,6 +34,7 @@ from services.subscriptions import get_client_subscription_status, get_expiring_
 router = Router()
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+REFERRAL_BONUS_DAYS = 20
 
 
 class EmailBindingStates(StatesGroup):
@@ -226,6 +227,71 @@ def _normalize_email(value: str) -> str:
 
 def _is_valid_email(value: str) -> bool:
     return bool(EMAIL_RE.match(_normalize_email(value)))
+
+
+def build_referral_link(bot_username: str, referral_code: str) -> str:
+    return f"https://t.me/{bot_username}?start=ref_{referral_code}"
+
+
+def format_referral_program_text(
+    *,
+    referral_link: str,
+    invited_count: int,
+    rewarded_count: int,
+    bonus_days_total: int,
+    recent_referrals: list[Client],
+) -> str:
+    lines = [
+        "<b>Реферальная программа</b>",
+        "",
+        f"Приглашайте друзей и получайте <b>+{REFERRAL_BONUS_DAYS} дней</b> подписки за первую успешную оплату каждого приглашённого пользователя.",
+        "",
+        "<b>Ваша ссылка</b>",
+        f"<code>{referral_link}</code>",
+        "",
+        "<b>Статистика</b>",
+        f"• Приглашено: <b>{invited_count}</b>",
+        f"• Оплатили впервые: <b>{rewarded_count}</b>",
+        f"• Начислено дней: <b>{bonus_days_total}</b>",
+    ]
+
+    if recent_referrals:
+        lines.extend(["", "<b>Последние приглашения</b>"])
+        for referral in recent_referrals:
+            name = referral.full_name or f"ID {referral.id}"
+            paid_marker = " — оплата засчитана" if referral.referral_reward_granted_at else ""
+            lines.append(f"• {name}{paid_marker}")
+
+    return "\n".join(lines)
+
+
+async def get_referral_stats(client_id: int) -> tuple[int, int, list[Client]]:
+    async with AsyncSessionLocal() as session:
+        invited_count = await session.scalar(
+            select(func.count())
+            .select_from(Client)
+            .where(Client.referrer_client_id == client_id)
+        )
+
+        rewarded_count = await session.scalar(
+            select(func.count())
+            .select_from(Client)
+            .where(
+                Client.referrer_client_id == client_id,
+                Client.referral_reward_granted_at.is_not(None),
+            )
+        )
+
+        result = await session.execute(
+            select(Client)
+            .where(Client.referrer_client_id == client_id)
+            .order_by(Client.referral_joined_at.desc().nullslast(), Client.id.desc())
+            .limit(5)
+        )
+        recent_referrals = list(result.scalars().all())
+
+    return invited_count or 0, rewarded_count or 0, recent_referrals
+
 
 
 async def get_client_by_telegram_id(telegram_id: str):
@@ -526,7 +592,6 @@ async def process_email_binding_code(message: Message, state: FSMContext):
 
 
 @router.message(Command("profile"))
-@router.message(Command("access"))
 @router.message(Command("subscription"))
 @router.message(F.text == "Мой доступ")
 @router.message(F.text == "Мой профиль")
@@ -553,7 +618,6 @@ async def cmd_devices(message: Message):
     await send_devices_message(message, client)
 
 
-@router.message(Command("login"))
 @router.message(F.text == "Войти в приложение")
 async def app_login_menu_from_reply(message: Message):
     await send_app_login_menu_message(message)
@@ -785,6 +849,36 @@ async def activate_trial_and_respond(message: Message):
         )
 
 
+
+
+@router.message(Command("referral"))
+@router.message(Command("referrals"))
+@router.message(F.text == "Рефералы")
+async def referral_program(message: Message, bot: Bot):
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+
+    if client is None:
+        await message.answer("Профиль пока не найден. Нажмите /start")
+        return
+
+    invited_count, rewarded_count, recent_referrals = await get_referral_stats(client.id)
+
+    me = await bot.get_me()
+    referral_link = build_referral_link(me.username, client.referral_code)
+
+    await message.answer(
+        format_referral_program_text(
+            referral_link=referral_link,
+            invited_count=invited_count,
+            rewarded_count=rewarded_count,
+            bonus_days_total=client.referral_bonus_days_total or 0,
+            recent_referrals=recent_referrals,
+        ),
+        parse_mode="HTML",
+        reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+    )
+
+
 @router.message(F.text == "Попробовать 7 дней")
 async def trial_period(message: Message):
     await activate_trial_and_respond(message)
@@ -902,48 +996,52 @@ async def cmd_preview_expiring(message: Message):
         )
 
 
-@router.message(Command("help"))
 @router.message(F.text == "Помощь")
 async def help_message(message: Message):
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
-            "Что можно сделать в боте:\n\n"
-            "• <b>Мой доступ</b> — статус, подключение и вход в приложение\n"
-            "• <b>Войти в приложение</b> — получить код входа\n"
-            "• <b>Мои устройства</b> — посмотреть и отключить устройства\n"
-            "• <b>Продлить доступ</b> — открыть оплату и подписку\n"
-            "• <b>Поддержка</b> — связаться с нами\n\n"
-            "Если после очистки чата не видно кнопки запуска:\n"
-            "1. Отправьте <code>/start</code>\n"
-            "2. Откройте <b>«Мой доступ»</b>\n"
-            "3. Для входа в приложение нажмите <b>«Войти в приложение»</b>\n\n"
+            "Доступные действия:\n"
+            "• Мой доступ\n"
+            "• Как подключить\n"
+            "• Попробовать 7 дней / Продлить доступ\n"
+            "• Поддержка\n\n"
+            "В разделе «Мой доступ» доступны:\n"
+            "• Подключить в Happ\n"
+            "• Показать данные для подключения\n"
+            "• Показать QR-код\n"
+            "• Войти в приложение\n"
+            "• Мои устройства\n"
+            "• Привязать или изменить email\n"
+            "• Продлить доступ\n\n"
             "Команды администратора:\n"
-            "• <code>/admin</code> — открыть админ-меню\n"
-            "• <code>/find [telegram_id | id | имя]</code> — найти клиента\n"
-            "• <code>/export_clients</code> — выгрузить клиентов в CSV\n"
-            "• <code>/news</code> — создать новость и сделать рассылку\n"
-            "• <code>/check_expiring</code> — показать подписки, истекающие в ближайшие 3 дня\n"
-            "• <code>/preview_expiring</code> — посмотреть напоминание о продлении",
-            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+            "• /admin — открыть админ-меню\n"
+            "• /find [telegram_id | id | имя] — найти клиента\n"
+            "• /export_clients — выгрузить клиентов в CSV\n"
+            "• /news — создать новость и сделать рассылку\n"
+            "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
+            "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
+            reply_markup=build_reply_keyboard_for_client(
+                await get_client_by_telegram_id(str(message.from_user.id)),
+                message.from_user.id,
+            ),
         )
     else:
         await message.answer(
-            "Что можно сделать в боте:\n\n"
-            "• <b>Мой доступ</b> — статус, подключение и вход в приложение\n"
-            "• <b>Как подключить</b> — инструкции для устройства\n"
-            "• <b>Продлить доступ</b> — открыть оплату и подписку\n"
-            "• <b>Поддержка</b> — связаться с нами\n\n"
-            "Команды:\n"
-            "• <code>/start</code> — запустить бота заново\n"
-            "• <code>/access</code> — открыть раздел доступа\n"
-            "• <code>/login</code> — получить код входа в приложение\n"
-            "• <code>/subscription</code> — открыть раздел доступа и продления\n"
-            "• <code>/help</code> — показать эту подсказку\n\n"
-            "Если после очистки чата не видно кнопки запуска:\n"
-            "1. Отправьте <code>/start</code>\n"
-            "2. Откройте <b>«Мой доступ»</b>\n"
-            "3. Для входа в приложение нажмите <b>«Войти в приложение»</b>",
-            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+            "Доступные действия:\n"
+            "• Мой доступ\n"
+            "• Как подключить\n"
+            "• Попробовать 7 дней / Продлить доступ\n"
+            "• Поддержка\n\n"
+            "В разделе «Мой доступ» доступны:\n"
+            "• Подключить в Happ\n"
+            "• Показать данные для подключения\n"
+            "• Показать QR-код\n"
+            "• Войти в приложение\n"
+            "• Мои устройства\n"
+            "• Привязать или изменить email\n"
+            "• Продлить доступ",
+            reply_markup=build_reply_keyboard_for_client(
+                await get_client_by_telegram_id(str(message.from_user.id)),
+                message.from_user.id,
+            ),
         )

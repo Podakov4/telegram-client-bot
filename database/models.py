@@ -20,6 +20,10 @@ def generate_public_id() -> str:
     return uuid4().hex
 
 
+def generate_referral_code() -> str:
+    return uuid4().hex[:12]
+
+
 class Client(Base):
     __tablename__ = "clients"
 
@@ -32,6 +36,12 @@ class Client(Base):
 
     # Cross-platform identity fields
     public_id = Column(String, unique=True, nullable=False, index=True, default=generate_public_id)
+    referral_code = Column(String, unique=True, nullable=False, index=True, default=generate_referral_code)
+    referrer_client_id = Column(Integer, ForeignKey("clients.id"), nullable=True, index=True)
+    referral_joined_at = Column(DateTime, nullable=True)
+    referral_reward_granted_at = Column(DateTime, nullable=True)
+    referral_bonus_days_total = Column(Integer, nullable=False, default=0)
+
     email = Column(String, unique=True, nullable=True, index=True)
     status = Column(String, nullable=False, default="active")  # active / blocked / deleted
     created_via = Column(String, nullable=False, default="telegram")  # telegram / email / admin / etc.
@@ -98,6 +108,17 @@ class Client(Base):
         "ClientVpnAccess",
         back_populates="client",
         cascade="all, delete-orphan",
+    )
+    referrer = relationship(
+        "Client",
+        remote_side=[id],
+        back_populates="referred_clients",
+        foreign_keys=[referrer_client_id],
+    )
+    referred_clients = relationship(
+        "Client",
+        back_populates="referrer",
+        foreign_keys=[referrer_client_id],
     )
 
 

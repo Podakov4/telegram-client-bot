@@ -28,6 +28,8 @@ DEFAULT_MAX_DEVICES_BY_MONTHS = {
     12: 3,
 }
 
+REFERRAL_BONUS_DAYS = 20
+
 
 def add_months_as_days(months: int) -> int:
     if months == 1:
@@ -101,6 +103,72 @@ async def _get_client_by_telegram_id(telegram_id: str) -> Client | None:
             select(Client).where(Client.telegram_id == str(telegram_id))
         )
         return result.scalar_one_or_none()
+
+
+async def grant_referral_bonus_if_eligible(
+    session,
+    *,
+    referred_client_id: int | None,
+    rewarded_at: datetime,
+) -> int | None:
+    if referred_client_id is None:
+        return None
+
+    result = await session.execute(
+        select(Client).where(Client.id == referred_client_id)
+    )
+    referred_client = result.scalar_one_or_none()
+
+    if referred_client is None:
+        return None
+
+    if referred_client.referrer_client_id is None:
+        return None
+
+    if referred_client.referral_reward_granted_at is not None:
+        return None
+
+    if referred_client.referrer_client_id == referred_client.id:
+        return None
+
+    result = await session.execute(
+        select(Client).where(Client.id == referred_client.referrer_client_id)
+    )
+    referrer = result.scalar_one_or_none()
+
+    if referrer is None:
+        return None
+
+    if referrer.paid_until and referrer.paid_until > rewarded_at:
+        starts_at = referrer.paid_until
+        ends_at = referrer.paid_until + timedelta(days=REFERRAL_BONUS_DAYS)
+    else:
+        starts_at = rewarded_at
+        ends_at = rewarded_at + timedelta(days=REFERRAL_BONUS_DAYS)
+
+    referrer.paid_until = ends_at
+    referrer.is_active = True
+    referrer.is_paid = True
+    referrer.status = "active"
+    referrer.updated_at = rewarded_at
+    referrer.last_expiring_notice_at = None
+    referrer.last_expired_notice_at = None
+    referrer.referral_bonus_days_total = (referrer.referral_bonus_days_total or 0) + REFERRAL_BONUS_DAYS
+
+    referred_client.referral_reward_granted_at = rewarded_at
+    referred_client.updated_at = rewarded_at
+
+    history = SubscriptionHistory(
+        client_id=referrer.id,
+        plan_code=f"referral_bonus_{REFERRAL_BONUS_DAYS}d",
+        is_trial=False,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        notes=f"referral bonus; referred_client_id={referred_client.id}",
+    )
+    session.add(history)
+
+    return referrer.id
 
 
 async def activate_subscription_by_client_id(
@@ -326,6 +394,8 @@ async def create_checkout_payment(telegram_id: str, full_name: str | None, month
 
 
 async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
+    bonus_referrer_client_id: int | None = None
+
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(YooKassaPayment).where(
@@ -339,6 +409,11 @@ async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
 
         if row.is_processed:
             return True, "Этот платеж уже был обработан раньше."
+
+        target_client_id = row.client_id
+        if target_client_id is None and row.telegram_id:
+            target_client = await _get_client_by_telegram_id(row.telegram_id)
+            target_client_id = target_client.id if target_client else None
 
         if row.client_id is not None:
             ok = await activate_subscription_by_client_id(
@@ -356,13 +431,23 @@ async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
         if not ok:
             return False, "Оплата прошла, но не удалось активировать подписку."
 
+        processed_at = datetime.utcnow()
+        bonus_referrer_client_id = await grant_referral_bonus_if_eligible(
+            session,
+            referred_client_id=target_client_id,
+            rewarded_at=processed_at,
+        )
+
         row.status = "succeeded"
         row.is_processed = True
-        row.processed_at = datetime.utcnow()
-        row.updated_at = datetime.utcnow()
+        row.processed_at = processed_at
+        row.updated_at = processed_at
         await session.commit()
 
-        return True, "Оплата подтверждена, подписка активирована."
+    if bonus_referrer_client_id is not None:
+        await create_vpn_access_for_client_id(bonus_referrer_client_id)
+
+    return True, "Оплата подтверждена, подписка активирована."
 
 
 async def confirm_checkout_payment_for_client(
