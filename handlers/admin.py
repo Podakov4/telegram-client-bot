@@ -5,6 +5,8 @@ import csv
 import qrcode
 from aiogram import Router, F, Bot
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select, or_, func
@@ -13,12 +15,21 @@ from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
 from database.models import Client, SubscriptionHistory
 from services.client_access import create_vpn_access_for_client
-from services.payments import activate_subscription, deactivate_subscription
+from services.payments import (
+    activate_subscription_days_by_client_id,
+    deactivate_subscription,
+)
 from services.subscriptions import get_expiring_clients, get_expired_clients
 from utils.happ_shared import admin_instructions_text, client_instructions_keyboard
 
 router = Router()
 
+
+class AdminGrantDaysStates(StatesGroup):
+    waiting_for_days = State()
+
+
+MAX_ADMIN_GRANT_DAYS = 3650
 
 
 def is_admin(user_id: int) -> bool:
@@ -47,13 +58,11 @@ def admin_client_actions_keyboard(client_id: int):
     builder.button(text="Все данные клиента", callback_data=f"admin_copy_all:{client_id}")
     builder.button(text="Отправить доступ заново", callback_data=f"admin_resend_access:{client_id}")
     builder.button(text="Отправить инструкции", callback_data=f"admin_send_instructions:{client_id}")
-    builder.button(text="Продлить 1 месяц", callback_data=f"admin_extend_1:{client_id}")
-    builder.button(text="Продлить 3 месяца", callback_data=f"admin_extend_3:{client_id}")
-    builder.button(text="Продлить 12 месяцев", callback_data=f"admin_extend_12:{client_id}")
+    builder.button(text="Выдать дни", callback_data=f"admin_grant_days:{client_id}")
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(2, 2, 1, 1, 1, 1, 1, 1)
+    builder.adjust(2, 2, 2, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -233,8 +242,6 @@ async def get_trial_clients(limit: int = 20):
         )
         clients = list(result.scalars().all())
         return [c for c in clients if c.notes and "trial_used=true" in c.notes]
-
-
 
 
 async def send_access_again_to_client(bot: Bot, client: Client) -> tuple[bool, str]:
@@ -429,6 +436,61 @@ async def cmd_find(message: Message):
     await message.answer(
         f"Найдено клиентов: {len(clients)}. Выберите нужного:",
         reply_markup=admin_search_results_keyboard(clients),
+    )
+
+
+@router.message(AdminGrantDaysStates.waiting_for_days)
+async def process_admin_grant_days(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Недостаточно прав.")
+        return
+
+    raw_text = (message.text or "").strip()
+    if raw_text.lower() in {"отмена", "/cancel", "cancel"}:
+        await state.clear()
+        await message.answer("Выдача дней отменена.")
+        return
+
+    if not raw_text.isdigit():
+        await message.answer(
+            "Введите целое количество дней, например <code>20</code> или <code>45</code>.\n"
+            "Чтобы отменить, напишите <b>Отмена</b>."
+        )
+        return
+
+    days = int(raw_text)
+    if days <= 0 or days > MAX_ADMIN_GRANT_DAYS:
+        await message.answer(
+            f"Введите число от 1 до {MAX_ADMIN_GRANT_DAYS}.\n"
+            "Чтобы отменить, напишите <b>Отмена</b>."
+        )
+        return
+
+    data = await state.get_data()
+    client_id = data.get("admin_grant_client_id")
+    if not client_id:
+        await state.clear()
+        await message.answer("Сессия выдачи дней устарела. Откройте клиента заново.")
+        return
+
+    ok = await activate_subscription_days_by_client_id(
+        client_id=int(client_id),
+        days=days,
+        reason=f"admin manual extension by user_id={message.from_user.id}",
+        plan_code=f"admin_{days}d",
+        mark_paid=True,
+    )
+    await state.clear()
+
+    if not ok:
+        await message.answer("Не удалось выдать доступ на указанное количество дней.")
+        return
+
+    updated = await get_client_by_db_id(int(client_id))
+    await message.answer(
+        f"Доступ выдан на <b>{days}</b> дн.\n\n{format_client_card(updated)}",
+        reply_markup=admin_client_actions_keyboard(updated.id),
     )
 
 
@@ -793,34 +855,33 @@ async def cb_admin_send_instructions(callback: CallbackQuery, bot: Bot):
     await callback.answer("Отправлено")
 
 
-@router.callback_query(F.data.startswith("admin_extend_"))
-async def cb_admin_extend(callback: CallbackQuery):
+@router.callback_query(F.data.startswith("admin_grant_days:"))
+async def cb_admin_grant_days(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
 
-    action, client_id_str = callback.data.split(":")
-    months = int(action.rsplit("_", 1)[1])
-    client_id = int(client_id_str)
-
+    client_id = int(callback.data.split(":", 1)[1])
     client = await get_client_by_db_id(client_id)
     if not client:
         await callback.message.answer("Клиент не найден.")
         await callback.answer()
         return
 
-    ok = await activate_subscription(client.telegram_id, months=months)
-    if not ok:
-        await callback.message.answer("Не удалось продлить подписку.")
-        await callback.answer()
-        return
+    await state.clear()
+    await state.set_state(AdminGrantDaysStates.waiting_for_days)
+    await state.update_data(admin_grant_client_id=client.id)
 
-    updated = await get_client_by_db_id(client_id)
     await callback.message.answer(
-        f"Подписка продлена на {months} мес.\n\n{format_client_card(updated)}",
-        reply_markup=admin_client_actions_keyboard(updated.id),
+        "<b>Выдача доступа в днях</b>\n\n"
+        f"Клиент: <b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID: <code>{client.id}</code>\n\n"
+        "Введите количество дней, которое нужно выдать.\n"
+        f"Допустимый диапазон: <b>1–{MAX_ADMIN_GRANT_DAYS}</b>.\n\n"
+        "Например: <code>20</code>\n"
+        "Чтобы отменить, напишите <b>Отмена</b>."
     )
-    await callback.answer("Готово")
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_recreate:"))

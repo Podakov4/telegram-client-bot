@@ -239,6 +239,97 @@ async def activate_subscription(
     )
 
 
+async def activate_subscription_days_by_client_id(
+    client_id: int,
+    days: int,
+    *,
+    max_devices: Optional[int] = None,
+    reason: str = "admin manual extension",
+    plan_code: Optional[str] = None,
+    mark_paid: bool = True,
+) -> bool:
+    if days <= 0:
+        return False
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.id == client_id)
+        )
+        client = result.scalar_one_or_none()
+
+        if client is None:
+            return False
+
+        now = datetime.utcnow()
+        notes_map = parse_notes_to_dict(client.notes)
+
+        resolved_max_devices = max_devices
+        if resolved_max_devices is None:
+            raw_current_limit = notes_map.get("max_devices")
+            try:
+                resolved_max_devices = int(raw_current_limit) if raw_current_limit else 1
+            except ValueError:
+                resolved_max_devices = 1
+
+        resolved_plan_code = plan_code or f"custom_{days}d"
+
+        if client.paid_until and client.paid_until > now:
+            starts_at = client.paid_until
+            ends_at = client.paid_until + timedelta(days=days)
+        else:
+            starts_at = now
+            ends_at = now + timedelta(days=days)
+
+        client.paid_until = ends_at
+        client.is_paid = mark_paid
+        client.is_active = True
+        client.status = "active"
+        client.updated_at = now
+        client.last_expiring_notice_at = None
+        client.last_expired_notice_at = None
+
+        notes_map["plan_code"] = resolved_plan_code
+        notes_map["max_devices"] = str(resolved_max_devices)
+        client.notes = dump_notes_from_dict(notes_map)
+
+        history = SubscriptionHistory(
+            client_id=client.id,
+            plan_code=resolved_plan_code,
+            is_trial=False,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            notes=f"{reason}; max_devices={resolved_max_devices}",
+        )
+        session.add(history)
+        await session.commit()
+
+    ok = await create_vpn_access_for_client_id(client_id)
+    return ok
+
+
+async def activate_subscription_days(
+    telegram_id: str,
+    days: int,
+    *,
+    max_devices: Optional[int] = None,
+    reason: str = "manual extension",
+    plan_code: Optional[str] = None,
+    mark_paid: bool = True,
+) -> bool:
+    client = await _get_client_by_telegram_id(telegram_id)
+    if client is None:
+        return False
+
+    return await activate_subscription_days_by_client_id(
+        client_id=client.id,
+        days=days,
+        max_devices=max_devices,
+        reason=reason,
+        plan_code=plan_code,
+        mark_paid=mark_paid,
+    )
+
+
 async def activate_trial_subscription_by_client_id(
     client_id: int,
     days: int = 7,
