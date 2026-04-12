@@ -391,6 +391,7 @@ async def get_admin_stats():
 
 
 @router.message(Command("admin"))
+@router.message(F.text.regexp(r"(?i)^админ$"))
 async def admin_menu(message: Message):
     if not is_admin(message.from_user.id):
         await message.answer("Недостаточно прав.")
