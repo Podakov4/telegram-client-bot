@@ -7,8 +7,6 @@ from database.models import Client
 
 router = Router()
 
-REFERRAL_BONUS_DAYS = 20
-
 
 def build_referral_link(bot_username: str, referral_code: str) -> str:
     return f"https://t.me/{bot_username}?start=ref_{referral_code}"
@@ -41,16 +39,20 @@ async def inline_referral_share(inline_query: InlineQuery, bot: Bot):
     referral_link = build_referral_link(me.username, referral_code)
 
     message_text = (
-        "<b>Freeth VPN</b>\n\n"
-        "Попробуй Freeth по моей ссылке. "
-        f"Если это будет твоя первая успешная оплата, мне начислят <b>+{REFERRAL_BONUS_DAYS} дней</b>.\n\n"
+        "<b>Freeth</b>\n\n"
+        "Freeth — это удобный сервис для защищенного и стабильного подключения. "
+        "Подходит для быстрого доступа, приватного соединения и повседневного использования без лишних настроек.\n\n"
+        "Подключение занимает всего пару минут:\n"
+        "• открой бота\n"
+        "• активируй доступ\n"
+        "• подключись по готовой инструкции\n\n"
         f"{referral_link}"
     )
 
     result = InlineQueryResultArticle(
         id=f"referral_{inline_query.from_user.id}",
         title="Отправить ссылку другу",
-        description=f"Поделиться ссылкой и получить +{REFERRAL_BONUS_DAYS} дней",
+        description="Поделиться ссылкой на Freeth",
         input_message_content=InputTextMessageContent(
             message_text=message_text,
             parse_mode="HTML",
