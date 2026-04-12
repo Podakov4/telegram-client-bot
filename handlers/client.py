@@ -82,10 +82,14 @@ def format_access_text(client: Client, *, active_devices: int, max_devices: int,
     email_text = getattr(client, "email", None) or "не привязан"
 
     if is_active:
-        intro_text = "Доступ активен. Ниже выберите нужное действие."
+        intro_text = (
+            "Доступ активен. Ниже выберите нужное действие.\n\n"
+            f"Совет: откройте <b>«Пригласить друга»</b> — за первую оплату друга вы получите <b>+{REFERRAL_BONUS_DAYS} дней</b>."
+        )
     else:
         intro_text = (
-            "Сейчас активного доступа нет. Вы можете попробовать 7 дней или оформить подписку."
+            "Сейчас активного доступа нет. Вы можете попробовать 7 дней или оформить подписку.\n\n"
+            f"После активации доступа сможете открыть <b>«Пригласить друга»</b> и получить <b>+{REFERRAL_BONUS_DAYS} дней</b> за первую оплату друга."
         )
 
     return (
@@ -996,14 +1000,18 @@ async def cmd_preview_expiring(message: Message):
         )
 
 
+@router.message(Command("help"))
 @router.message(F.text == "Помощь")
 async def help_message(message: Message):
+    client = await get_client_by_telegram_id(str(message.from_user.id))
+
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "Доступные действия:\n"
             "• Мой доступ\n"
             "• Как подключить\n"
             "• Попробовать 7 дней / Продлить доступ\n"
+            "• Пригласить друга\n"
             "• Поддержка\n\n"
             "В разделе «Мой доступ» доступны:\n"
             "• Подключить в Happ\n"
@@ -1013,17 +1021,16 @@ async def help_message(message: Message):
             "• Мои устройства\n"
             "• Привязать или изменить email\n"
             "• Продлить доступ\n\n"
+            f"Раздел <b>«Пригласить друга»</b> показывает вашу ссылку и даёт получить <b>+{REFERRAL_BONUS_DAYS} дней</b> после первой оплаты приглашённого друга.\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
             "• /find [telegram_id | id | имя] — найти клиента\n"
             "• /export_clients — выгрузить клиентов в CSV\n"
             "• /news — создать новость и сделать рассылку\n"
             "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
-            "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
-            reply_markup=build_reply_keyboard_for_client(
-                await get_client_by_telegram_id(str(message.from_user.id)),
-                message.from_user.id,
-            ),
+            "• /preview_expiring — посмотреть, как выглядит напоминание о продлении\n\n"
+            "Команда клиента: <code>/referral</code> — открыть раздел <b>«Пригласить друга»</b>.",
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
         )
     else:
         await message.answer(
@@ -1031,6 +1038,7 @@ async def help_message(message: Message):
             "• Мой доступ\n"
             "• Как подключить\n"
             "• Попробовать 7 дней / Продлить доступ\n"
+            "• Пригласить друга\n"
             "• Поддержка\n\n"
             "В разделе «Мой доступ» доступны:\n"
             "• Подключить в Happ\n"
@@ -1039,9 +1047,8 @@ async def help_message(message: Message):
             "• Войти в приложение\n"
             "• Мои устройства\n"
             "• Привязать или изменить email\n"
-            "• Продлить доступ",
-            reply_markup=build_reply_keyboard_for_client(
-                await get_client_by_telegram_id(str(message.from_user.id)),
-                message.from_user.id,
-            ),
+            "• Продлить доступ\n\n"
+            f"Раздел <b>«Пригласить друга»</b> показывает вашу ссылку и даёт получить <b>+{REFERRAL_BONUS_DAYS} дней</b> после первой оплаты приглашённого друга.\n\n"
+            "Команда: <code>/referral</code> — открыть раздел <b>«Пригласить друга»</b>.",
+            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
         )
