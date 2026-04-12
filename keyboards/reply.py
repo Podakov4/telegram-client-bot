@@ -22,7 +22,7 @@ def main_reply_keyboard(
         ],
         [
             KeyboardButton(text="Помощь"),
-            KeyboardButton(text="Рефералы"),
+            KeyboardButton(text="Пригласить друга"),
         ],
     ]
 

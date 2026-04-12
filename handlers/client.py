@@ -242,9 +242,9 @@ def format_referral_program_text(
     recent_referrals: list[Client],
 ) -> str:
     lines = [
-        "<b>Реферальная программа</b>",
+        "<b>Пригласить друга</b>",
         "",
-        f"Приглашайте друзей и получайте <b>+{REFERRAL_BONUS_DAYS} дней</b> подписки за первую успешную оплату каждого приглашённого пользователя.",
+        f"Поделитесь своей ссылкой с другом и получите <b>+{REFERRAL_BONUS_DAYS} дней</b> подписки после его первой успешной оплаты.",
         "",
         "<b>Ваша ссылка</b>",
         f"<code>{referral_link}</code>",
@@ -853,7 +853,7 @@ async def activate_trial_and_respond(message: Message):
 
 @router.message(Command("referral"))
 @router.message(Command("referrals"))
-@router.message(F.text == "Рефералы")
+@router.message(F.text == "Пригласить друга")
 async def referral_program(message: Message, bot: Bot):
     client = await get_client_by_telegram_id(str(message.from_user.id))
 
