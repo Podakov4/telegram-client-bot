@@ -10,7 +10,7 @@ from aiogram.enums import ParseMode
 
 import config
 from database import create_tables
-from handlers import admin, client, common, documents, instructions, menu, news, support
+from handlers import admin, client, common, documents, inline_referral, instructions, menu, news, support
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
@@ -38,6 +38,7 @@ async def main():
     dp.include_router(support.router)
     dp.include_router(documents.router)
     dp.include_router(news.router)
+    dp.include_router(inline_referral.router)
 
     await bot.delete_webhook(drop_pending_updates=True)
 

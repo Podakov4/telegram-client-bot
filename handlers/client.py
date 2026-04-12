@@ -7,7 +7,12 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    Message,
+    SwitchInlineQueryChosenChat,
+)
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import func, select
 
@@ -82,14 +87,10 @@ def format_access_text(client: Client, *, active_devices: int, max_devices: int,
     email_text = getattr(client, "email", None) or "не привязан"
 
     if is_active:
-        intro_text = (
-            "Доступ активен. Ниже выберите нужное действие.\n\n"
-            f"Совет: откройте <b>«Пригласить друга»</b> — за первую оплату друга вы получите <b>+{REFERRAL_BONUS_DAYS} дней</b>."
-        )
+        intro_text = "Доступ активен. Ниже выберите нужное действие."
     else:
         intro_text = (
-            "Сейчас активного доступа нет. Вы можете попробовать 7 дней или оформить подписку.\n\n"
-            f"После активации доступа сможете открыть <b>«Пригласить друга»</b> и получить <b>+{REFERRAL_BONUS_DAYS} дней</b> за первую оплату друга."
+            "Сейчас активного доступа нет. Вы можете попробовать 7 дней или оформить подписку."
         )
 
     return (
@@ -233,6 +234,8 @@ def _is_valid_email(value: str) -> bool:
     return bool(EMAIL_RE.match(_normalize_email(value)))
 
 
+
+
 def build_referral_link(bot_username: str, referral_code: str) -> str:
     return f"https://t.me/{bot_username}?start=ref_{referral_code}"
 
@@ -248,44 +251,58 @@ def format_referral_program_text(
     lines = [
         "<b>Пригласить друга</b>",
         "",
-        f"Поделитесь своей ссылкой с другом и получите <b>+{REFERRAL_BONUS_DAYS} дней</b> подписки после его первой успешной оплаты.",
-        "",
-        "<b>Ваша ссылка</b>",
-        f"<code>{referral_link}</code>",
+        f"Поделитесь своей ссылкой с другом и получите <b>+{REFERRAL_BONUS_DAYS} дней</b> после его первой успешной оплаты.",
         "",
         "<b>Статистика</b>",
-        f"• Приглашено: <b>{invited_count}</b>",
-        f"• Оплатили впервые: <b>{rewarded_count}</b>",
+        f"• Пришли по ссылке: <b>{invited_count}</b>",
+        f"• Купили подписку: <b>{rewarded_count}</b>",
         f"• Начислено дней: <b>{bonus_days_total}</b>",
+        "",
+        "<b>Ссылка для приглашения</b>",
+        f"<code>{referral_link}</code>",
     ]
 
     if recent_referrals:
         lines.extend(["", "<b>Последние приглашения</b>"])
         for referral in recent_referrals:
-            name = referral.full_name or f"ID {referral.id}"
-            paid_marker = " — оплата засчитана" if referral.referral_reward_granted_at else ""
-            lines.append(f"• {name}{paid_marker}")
+            referral_name = referral.full_name or f"ID {referral.id}"
+            paid_mark = " — оплата засчитана" if referral.referral_reward_granted_at else ""
+            lines.append(f"• {referral_name}{paid_mark}")
 
+    lines.extend([
+        "",
+        "Нажмите кнопку ниже, чтобы выбрать контакт и отправить ссылку сразу из Telegram."
+    ])
     return "\n".join(lines)
+
+
+def referral_share_keyboard() -> object:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Отправить ссылку другу ↗️",
+        switch_inline_query_chosen_chat=SwitchInlineQueryChosenChat(
+            query="share_referral",
+            allow_user_chats=True,
+            allow_bot_chats=False,
+            allow_group_chats=True,
+            allow_channel_chats=False,
+        ),
+    )
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 async def get_referral_stats(client_id: int) -> tuple[int, int, list[Client]]:
     async with AsyncSessionLocal() as session:
         invited_count = await session.scalar(
-            select(func.count())
-            .select_from(Client)
-            .where(Client.referrer_client_id == client_id)
+            select(func.count()).select_from(Client).where(Client.referrer_client_id == client_id)
         )
-
         rewarded_count = await session.scalar(
-            select(func.count())
-            .select_from(Client)
-            .where(
+            select(func.count()).select_from(Client).where(
                 Client.referrer_client_id == client_id,
                 Client.referral_reward_granted_at.is_not(None),
             )
         )
-
         result = await session.execute(
             select(Client)
             .where(Client.referrer_client_id == client_id)
@@ -295,7 +312,6 @@ async def get_referral_stats(client_id: int) -> tuple[int, int, list[Client]]:
         recent_referrals = list(result.scalars().all())
 
     return invited_count or 0, rewarded_count or 0, recent_referrals
-
 
 
 async def get_client_by_telegram_id(telegram_id: str):
@@ -854,7 +870,6 @@ async def activate_trial_and_respond(message: Message):
 
 
 
-
 @router.message(Command("referral"))
 @router.message(Command("referrals"))
 @router.message(F.text == "Пригласить друга")
@@ -863,6 +878,12 @@ async def referral_program(message: Message, bot: Bot):
 
     if client is None:
         await message.answer("Профиль пока не найден. Нажмите /start")
+        return
+
+    if not getattr(client, "referral_code", None):
+        await message.answer(
+            "Реферальная ссылка пока не готова. Попробуйте снова через несколько секунд."
+        )
         return
 
     invited_count, rewarded_count, recent_referrals = await get_referral_stats(client.id)
@@ -875,11 +896,11 @@ async def referral_program(message: Message, bot: Bot):
             referral_link=referral_link,
             invited_count=invited_count,
             rewarded_count=rewarded_count,
-            bonus_days_total=client.referral_bonus_days_total or 0,
+            bonus_days_total=getattr(client, "referral_bonus_days_total", 0) or 0,
             recent_referrals=recent_referrals,
         ),
         parse_mode="HTML",
-        reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+        reply_markup=referral_share_keyboard(),
     )
 
 
@@ -1000,11 +1021,8 @@ async def cmd_preview_expiring(message: Message):
         )
 
 
-@router.message(Command("help"))
 @router.message(F.text == "Помощь")
 async def help_message(message: Message):
-    client = await get_client_by_telegram_id(str(message.from_user.id))
-
     if message.from_user.id in ADMIN_IDS:
         await message.answer(
             "Доступные действия:\n"
@@ -1021,16 +1039,18 @@ async def help_message(message: Message):
             "• Мои устройства\n"
             "• Привязать или изменить email\n"
             "• Продлить доступ\n\n"
-            f"Раздел <b>«Пригласить друга»</b> показывает вашу ссылку и даёт получить <b>+{REFERRAL_BONUS_DAYS} дней</b> после первой оплаты приглашённого друга.\n\n"
+            f"Раздел <b>«Пригласить друга»</b> даёт вашу ссылку и кнопку отправки другу. За первую успешную оплату друга вы получите <b>+{REFERRAL_BONUS_DAYS} дней</b>.\n\n"
             "Команды администратора:\n"
             "• /admin — открыть админ-меню\n"
             "• /find [telegram_id | id | имя] — найти клиента\n"
             "• /export_clients — выгрузить клиентов в CSV\n"
             "• /news — создать новость и сделать рассылку\n"
             "• /check_expiring — показать подписки, истекающие в ближайшие 3 дня\n"
-            "• /preview_expiring — посмотреть, как выглядит напоминание о продлении\n\n"
-            "Команда клиента: <code>/referral</code> — открыть раздел <b>«Пригласить друга»</b>.",
-            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+            "• /preview_expiring — посмотреть, как выглядит напоминание о продлении",
+            reply_markup=build_reply_keyboard_for_client(
+                await get_client_by_telegram_id(str(message.from_user.id)),
+                message.from_user.id,
+            ),
         )
     else:
         await message.answer(
@@ -1048,7 +1068,9 @@ async def help_message(message: Message):
             "• Мои устройства\n"
             "• Привязать или изменить email\n"
             "• Продлить доступ\n\n"
-            f"Раздел <b>«Пригласить друга»</b> показывает вашу ссылку и даёт получить <b>+{REFERRAL_BONUS_DAYS} дней</b> после первой оплаты приглашённого друга.\n\n"
-            "Команда: <code>/referral</code> — открыть раздел <b>«Пригласить друга»</b>.",
-            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+            f"В разделе <b>«Пригласить друга»</b> можно сразу выбрать контакт и отправить свою ссылку. За первую успешную оплату друга вы получите <b>+{REFERRAL_BONUS_DAYS} дней</b>.",
+            reply_markup=build_reply_keyboard_for_client(
+                await get_client_by_telegram_id(str(message.from_user.id)),
+                message.from_user.id,
+            ),
         )
