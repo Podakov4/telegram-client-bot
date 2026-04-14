@@ -25,6 +25,7 @@ from services.client_access import (
     get_client_subscription_links_by_client_id,
     get_client_vpn_access_by_client_id,
 )
+from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.payments import create_checkout_payment_for_client, process_successful_payment
 from services.subscriptions import (
@@ -237,6 +238,32 @@ async def get_subscription(token: str):
                 "Expires": "0",
             },
         )
+
+
+@app.get("/sub/{token}/happ")
+async def get_happ_import_link(token: str):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client).where(Client.happ_subscription_token == token)
+        )
+        client = result.scalar_one_or_none()
+
+        if client is None:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+
+        if not client.happ_subscription_url:
+            raise HTTPException(status_code=404, detail="Happ subscription URL not found")
+
+        try:
+            encrypted_url = encrypt_happ_subscription_url(client.happ_subscription_url)
+        except HappCryptoError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+
+        return {
+            "ok": True,
+            "url": encrypted_url,
+            "plain_url": client.happ_subscription_url,
+        }
 
 
 # =========================

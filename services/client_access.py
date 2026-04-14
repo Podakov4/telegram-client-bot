@@ -14,6 +14,7 @@ from config import APP_BASE_URL
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, VpnNode
 from services.vless import DEFAULT_NODE_CONFIG, NodeConfig, VLESSManager
+from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,17 @@ def generate_happ_subscription_token() -> str:
 
 def build_happ_subscription_url(token: str) -> str:
     return f"{APP_BASE_URL}/sub/{token}"
+
+
+def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
+    if not plain_subscription_url:
+        return None
+
+    try:
+        return encrypt_happ_subscription_url(plain_subscription_url)
+    except HappCryptoError:
+        logger.exception("Failed to encrypt Happ subscription URL")
+        return None
 
 
 def ensure_happ_subscription_for_client(client: Client) -> None:
@@ -86,6 +98,7 @@ def _serialize_legacy_vpn_access(client: Client) -> dict:
     subscription_active = is_client_subscription_active(client)
     manual_url = client.subscription_link
     servers = []
+
     if manual_url:
         servers.append(
             {
@@ -97,6 +110,23 @@ def _serialize_legacy_vpn_access(client: Client) -> dict:
                 "enabled": True,
             }
         )
+
+    happ_import_url = build_happ_import_url(client.happ_subscription_url)
+
+    return {
+        "access": bool(client.xui_uuid and client.subscription_link),
+        "subscription_active": subscription_active,
+        "expires_at": client.paid_until.isoformat() if client.paid_until else None,
+        "vpn": {
+            "type": "xray_vless",
+            "subscription_url": client.happ_subscription_url,
+            "happ_import_url": happ_import_url or client.happ_subscription_url,
+            "manual_url": manual_url,
+            "manual_urls": [manual_url] if manual_url else [],
+            "servers": servers,
+            "supports": SUPPORTED_PLATFORMS,
+        },
+    }
 
     return {
         "access": bool(client.xui_uuid and client.subscription_link),
@@ -241,6 +271,7 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
     for access, node in pairs:
         if not access.subscription_link:
             continue
+
         manual_urls.append(access.subscription_link)
         servers.append(
             {
@@ -253,6 +284,24 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
                 "enabled": bool(access.is_enabled and node.is_active),
             }
         )
+
+    manual_url = manual_urls[0] if manual_urls else None
+    happ_import_url = build_happ_import_url(client.happ_subscription_url)
+
+    return {
+        "access": bool(manual_urls),
+        "subscription_active": subscription_active,
+        "expires_at": client.paid_until.isoformat() if client.paid_until else None,
+        "vpn": {
+            "type": "xray_vless",
+            "subscription_url": client.happ_subscription_url,
+            "happ_import_url": happ_import_url or client.happ_subscription_url,
+            "manual_url": manual_url,
+            "manual_urls": manual_urls,
+            "servers": servers,
+            "supports": SUPPORTED_PLATFORMS,
+        },
+    }
 
     manual_url = manual_urls[0] if manual_urls else None
 
