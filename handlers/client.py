@@ -32,6 +32,7 @@ from services.auth_service import (
     ExpiredLoginCodeError,
     InvalidLoginCodeError,
 )
+from services.client_access import build_happ_import_url
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.payments import activate_trial_subscription, create_checkout_payment
 from services.subscriptions import get_client_subscription_status, get_expiring_clients
@@ -724,9 +725,11 @@ async def cb_show_happ_subscription(callback: CallbackQuery):
         await callback.answer()
         return
 
+    happ_link = build_happ_import_url(client.happ_subscription_url) or client.happ_subscription_url
+
     await callback.message.answer(
         "Ссылка для подключения в Happ:\n\n"
-        f"<code>{client.happ_subscription_url}</code>\n\n"
+        f"<code>{happ_link}</code>\n\n"
         "Откройте Happ и импортируйте эту ссылку как подписку.",
         parse_mode="HTML",
         reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
