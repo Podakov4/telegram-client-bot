@@ -236,6 +236,7 @@ async def get_subscription(token: str):
                 "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                 "Pragma": "no-cache",
                 "Expires": "0",
+                "hide-settings": "1",
             },
         )
 
@@ -604,6 +605,7 @@ async def get_vpn_subscription_url(
     return {
         "ok": True,
         "subscription_url": vpn.get("subscription_url"),
+        "happ_import_url": vpn.get("happ_import_url"),
         "manual_url": vpn.get("manual_url"),
         "manual_urls": vpn.get("manual_urls", []),
         "servers": vpn.get("servers", []),
