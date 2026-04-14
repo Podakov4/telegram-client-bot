@@ -7,10 +7,10 @@ from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Re
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from config import BOT_TOKEN
+from config import BOT_TOKEN, SUPPORT_URL
 from database.db import AsyncSessionLocal, get_db
 from database.models import Client, YooKassaPayment
 from services.auth_service import (
@@ -25,8 +25,8 @@ from services.client_access import (
     get_client_subscription_links_by_client_id,
     get_client_vpn_access_by_client_id,
 )
-from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
 from services.device_service import DeviceNotFoundError, DeviceService
+from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
 from services.payments import create_checkout_payment_for_client, process_successful_payment
 from services.subscriptions import (
     get_client_subscription_status,
@@ -237,6 +237,9 @@ async def get_subscription(token: str):
                 "Pragma": "no-cache",
                 "Expires": "0",
                 "hide-settings": "1",
+                "profile-title": "Freeth",
+                "support-url": SUPPORT_URL,
+                "profile-update-interval": "1",
             },
         )
 
