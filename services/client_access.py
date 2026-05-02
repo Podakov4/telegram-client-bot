@@ -128,20 +128,6 @@ def _serialize_legacy_vpn_access(client: Client) -> dict:
         },
     }
 
-    return {
-        "access": bool(client.xui_uuid and client.subscription_link),
-        "subscription_active": subscription_active,
-        "expires_at": client.paid_until.isoformat() if client.paid_until else None,
-        "vpn": {
-            "type": "xray_vless",
-            "subscription_url": client.happ_subscription_url,
-            "manual_url": manual_url,
-            "manual_urls": [manual_url] if manual_url else [],
-            "servers": servers,
-            "supports": SUPPORTED_PLATFORMS,
-        },
-    }
-
 
 async def _load_active_nodes(session: AsyncSession) -> list[VpnNode]:
     try:
@@ -280,6 +266,10 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
                 "display_name": node.display_name,
                 "country_code": node.country_code,
                 "domain": node.vless_domain,
+                "public_port": node.vless_public_port,
+                "path": node.vless_path,
+                "security": node.vless_security,
+                "sni": node.vless_sni,
                 "manual_url": access.subscription_link,
                 "enabled": bool(access.is_enabled and node.is_active),
             }
@@ -296,22 +286,6 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
             "type": "xray_vless",
             "subscription_url": client.happ_subscription_url,
             "happ_import_url": happ_import_url or client.happ_subscription_url,
-            "manual_url": manual_url,
-            "manual_urls": manual_urls,
-            "servers": servers,
-            "supports": SUPPORTED_PLATFORMS,
-        },
-    }
-
-    manual_url = manual_urls[0] if manual_urls else None
-
-    return {
-        "access": bool(manual_urls),
-        "subscription_active": subscription_active,
-        "expires_at": client.paid_until.isoformat() if client.paid_until else None,
-        "vpn": {
-            "type": "xray_vless",
-            "subscription_url": client.happ_subscription_url,
             "manual_url": manual_url,
             "manual_urls": manual_urls,
             "servers": servers,

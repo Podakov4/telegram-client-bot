@@ -77,3 +77,16 @@ ADMIN_IDS = [
     for x in get_env("ADMIN_IDS", "").split(",")
     if x.strip()
 ]
+# Optional USA node settings. These are used by maintenance scripts such as
+# scripts/add_us_vpn_node.py. Runtime multi-node access is loaded from DB table vpn_nodes.
+US_XUI_BASE_URL = get_env("US_XUI_BASE_URL", "").rstrip("/")
+US_XUI_WEB_BASE_PATH = get_env("US_XUI_WEB_BASE_PATH", "").strip("/")
+US_XUI_USERNAME = get_env("US_XUI_USERNAME", "")
+US_XUI_PASSWORD = get_env("US_XUI_PASSWORD", "")
+US_XRAY_INBOUND_PORT = get_env_int("US_XRAY_INBOUND_PORT", XRAY_INBOUND_PORT)
+
+US_VLESS_DOMAIN = get_env("US_VLESS_DOMAIN", "us.freeth.ru")
+US_VLESS_PUBLIC_PORT = get_env_int("US_VLESS_PUBLIC_PORT", VLESS_PUBLIC_PORT)
+US_VLESS_PATH = get_env("US_VLESS_PATH", VLESS_PATH)
+US_VLESS_SECURITY = get_env("US_VLESS_SECURITY", VLESS_SECURITY)
+US_VLESS_SNI = get_env("US_VLESS_SNI", US_VLESS_DOMAIN)

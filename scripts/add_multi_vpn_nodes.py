@@ -3,7 +3,12 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
 
 from config import (
     XRAY_INBOUND_PORT,
@@ -18,19 +23,45 @@ from config import (
     VLESS_SNI,
 )
 
-BASE_DIR = Path(__file__).resolve().parents[1]
 DB_PATH = BASE_DIR / "database" / "clients.db"
+
+
+def normalize_panel_url_and_path(panel_url: str, web_base_path: str) -> tuple[str, str]:
+    raw_url = (panel_url or "").strip().rstrip("/")
+    raw_path = (web_base_path or "").strip().strip("/")
+
+    parsed = urlsplit(raw_url)
+    url_path = parsed.path.strip("/")
+    clean_url = urlunsplit((parsed.scheme, parsed.netloc, "", "", "")).rstrip("/")
+
+    if not raw_path and url_path:
+        raw_path = url_path
+
+    return clean_url, raw_path
 
 DE_PANEL_URL = os.getenv("DE_XUI_BASE_URL", "https://panel-de.freeth.ru")
 DE_PANEL_USERNAME = os.getenv("DE_XUI_USERNAME", "admin")
 DE_PANEL_PASSWORD = os.getenv("DE_XUI_PASSWORD", "change-me")
 DE_WEB_BASE_PATH = os.getenv("DE_XUI_WEB_BASE_PATH", "")
+DE_PANEL_URL, DE_WEB_BASE_PATH = normalize_panel_url_and_path(DE_PANEL_URL, DE_WEB_BASE_PATH)
 DE_INBOUND_PORT = int(os.getenv("DE_XRAY_INBOUND_PORT", str(XRAY_INBOUND_PORT)))
 DE_VLESS_DOMAIN = os.getenv("DE_VLESS_DOMAIN", "de.freeth.ru")
 DE_VLESS_PUBLIC_PORT = int(os.getenv("DE_VLESS_PUBLIC_PORT", str(VLESS_PUBLIC_PORT)))
 DE_VLESS_PATH = os.getenv("DE_VLESS_PATH", VLESS_PATH)
 DE_VLESS_SECURITY = os.getenv("DE_VLESS_SECURITY", VLESS_SECURITY)
 DE_VLESS_SNI = os.getenv("DE_VLESS_SNI", DE_VLESS_DOMAIN)
+
+US_PANEL_URL = os.getenv("US_XUI_BASE_URL", "https://panel-us.freeth.ru:54321")
+US_PANEL_USERNAME = os.getenv("US_XUI_USERNAME", "admin")
+US_PANEL_PASSWORD = os.getenv("US_XUI_PASSWORD", "change-me")
+US_WEB_BASE_PATH = os.getenv("US_XUI_WEB_BASE_PATH", "")
+US_PANEL_URL, US_WEB_BASE_PATH = normalize_panel_url_and_path(US_PANEL_URL, US_WEB_BASE_PATH)
+US_INBOUND_PORT = int(os.getenv("US_XRAY_INBOUND_PORT", str(XRAY_INBOUND_PORT)))
+US_VLESS_DOMAIN = os.getenv("US_VLESS_DOMAIN", "us.freeth.ru")
+US_VLESS_PUBLIC_PORT = int(os.getenv("US_VLESS_PUBLIC_PORT", str(VLESS_PUBLIC_PORT)))
+US_VLESS_PATH = os.getenv("US_VLESS_PATH", VLESS_PATH)
+US_VLESS_SECURITY = os.getenv("US_VLESS_SECURITY", VLESS_SECURITY)
+US_VLESS_SNI = os.getenv("US_VLESS_SNI", US_VLESS_DOMAIN)
 
 
 def main() -> None:
@@ -133,6 +164,24 @@ def main() -> None:
             "is_active": 1,
             "sort_order": 20,
         },
+        {
+            "code": "us",
+            "name": "United States",
+            "display_name": "🇺🇸 USA",
+            "country_code": "US",
+            "panel_url": US_PANEL_URL,
+            "panel_username": US_PANEL_USERNAME,
+            "panel_password": US_PANEL_PASSWORD,
+            "web_base_path": US_WEB_BASE_PATH,
+            "inbound_port": US_INBOUND_PORT,
+            "vless_domain": US_VLESS_DOMAIN,
+            "vless_public_port": US_VLESS_PUBLIC_PORT,
+            "vless_path": US_VLESS_PATH,
+            "vless_security": US_VLESS_SECURITY,
+            "vless_sni": US_VLESS_SNI,
+            "is_active": 1,
+            "sort_order": 40,
+        },
     ]
 
     for node in nodes:
@@ -220,6 +269,7 @@ def main() -> None:
     print(f"Done. Multi-node tables are ready in: {DB_PATH}")
     print("NL node synced from current config and legacy client access copied to client_vpn_access.")
     print("DE node values came from environment variables DE_XUI_* / DE_VLESS_*.")
+    print("US node values came from environment variables US_XUI_* / US_VLESS_*.")
 
 
 if __name__ == "__main__":
