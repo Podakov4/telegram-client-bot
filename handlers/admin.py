@@ -21,7 +21,11 @@ from services.payments import (
     activate_subscription_days_by_client_id,
     deactivate_subscription,
 )
-from services.subscriptions import get_expiring_clients, get_expired_clients
+from services.subscriptions import (
+    get_expiring_clients,
+    get_expired_clients_for_notice,
+    mark_expired_notice_sent,
+)
 from utils.happ_shared import admin_instructions_text, client_instructions_keyboard
 
 router = Router()
@@ -487,6 +491,23 @@ async def get_trial_clients(limit: int = 20):
         return [c for c in clients if c.notes and "trial_used=true" in c.notes]
 
 
+
+async def get_expired_clients_all(limit: int = 20):
+    now = datetime.utcnow()
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Client)
+            .where(
+                Client.paid_until.is_not(None),
+                Client.paid_until <= now,
+            )
+            .order_by(Client.paid_until.desc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+
 async def send_access_again_to_client(bot: Bot, client: Client) -> tuple[bool, str]:
     if not client.telegram_id:
         return False, "У клиента не указан Telegram ID."
@@ -928,7 +949,7 @@ async def cb_admin_dashboard_expired(callback: CallbackQuery):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
 
-    clients = await get_expired_clients()
+    clients = await get_expired_clients_all(limit=20)
 
     if not clients:
         await callback.message.answer("Нет просроченных подписок.")
@@ -937,7 +958,7 @@ async def cb_admin_dashboard_expired(callback: CallbackQuery):
 
     await callback.message.answer(
         f"Просроченные подписки: {len(clients)}",
-        reply_markup=clients_list_keyboard(clients[:20]),
+        reply_markup=clients_list_keyboard(clients),
     )
     await callback.answer()
 
@@ -1017,25 +1038,41 @@ async def cb_admin_notify_expired(callback: CallbackQuery, bot: Bot):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
 
-    clients = await get_expired_clients()
+    clients = await get_expired_clients_for_notice(cooldown_hours=20)
 
     if not clients:
-        await callback.message.answer("Нет клиентов с истекшей подпиской.")
+        await callback.message.answer(
+            "Нет клиентов для напоминания о просрочке.\n\n"
+            "Возможные причины:\n"
+            "• просроченных нет;\n"
+            "• всем уже отправляли напоминание за последние 20 часов;\n"
+            "• у клиентов нет Telegram ID."
+        )
         await callback.answer()
         return
 
     sent = 0
     failed = 0
+    skipped = 0
 
     for client in clients:
+        if not client.telegram_id:
+            skipped += 1
+            continue
+
         ok = await send_expired_notice(bot, client)
+
         if ok:
             sent += 1
+            await mark_expired_notice_sent(client.id)
         else:
             failed += 1
 
     await callback.message.answer(
-        f"Готово.\n\nСообщений отправлено: {sent}\nОшибок: {failed}"
+        f"Готово.\n\n"
+        f"Сообщений отправлено: {sent}\n"
+        f"Ошибок: {failed}\n"
+        f"Пропущено без Telegram ID: {skipped}"
     )
     await callback.answer()
 
