@@ -4,6 +4,7 @@ import re
 
 import qrcode
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -347,7 +348,7 @@ async def send_access_message(message: Message, client: Client):
     )
 
 
-async def send_devices_message(message: Message, client: Client):
+async def build_devices_view(client: Client) -> tuple[str, object | None]:
     async with AsyncSessionLocal() as session:
         devices = await DeviceService.list_devices(
             db=session,
@@ -364,51 +365,48 @@ async def send_devices_message(message: Message, client: Client):
     )
 
     if not devices:
-        await message.answer(
-            header + "У вас пока нет зарегистрированных устройств.",
-            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
-        )
-        return
+        return header + "У вас пока нет зарегистрированных устройств.", None
 
     body = "\n\n".join(format_device_line(device) for device in devices)
+    text = body + "\n\nНажмите кнопку ниже, чтобы отключить активное устройство или удалить из списка отключенное."
+
+    return header + text, devices_keyboard(devices)
+
+
+async def send_devices_message(message: Message, client: Client):
+    text, reply_markup = await build_devices_view(client)
 
     await message.answer(
-        header + body + "\n\nАктивное устройство можно отключить. Отключенное устройство можно удалить из списка.",
-        reply_markup=devices_keyboard(devices),
+        text,
+        reply_markup=reply_markup or build_reply_keyboard_for_client(client, message.from_user.id),
     )
 
 
 async def send_devices_callback_message(callback: CallbackQuery, client: Client):
-    async with AsyncSessionLocal() as session:
-        devices = await DeviceService.list_devices(
-            db=session,
-            client_id=client.id,
-            include_revoked=True,
-        )
-        limit_info = await DeviceService.get_device_limit_info(db=session, client=client)
-        sub_status = await get_client_subscription_status(client=client, db=session)
-
-    header = (
-        "<b>Мои устройства</b>\n\n"
-        f"Лимит устройств: <b>{limit_info.active_devices}/{limit_info.max_devices}</b>\n"
-        f"Подписка активна: <b>{'да' if sub_status.is_active else 'нет'}</b>\n\n"
-    )
-
-    if not devices:
-        await callback.message.answer(
-            header + "У вас пока нет зарегистрированных устройств.",
-            reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
-        )
-        await callback.answer()
-        return
-
-    body = "\n\n".join(format_device_line(device) for device in devices)
+    text, reply_markup = await build_devices_view(client)
 
     await callback.message.answer(
-        header + body + "\n\nАктивное устройство можно отключить. Отключенное устройство можно удалить из списка.",
-        reply_markup=devices_keyboard(devices),
+        text,
+        reply_markup=reply_markup,
     )
     await callback.answer()
+
+
+async def refresh_devices_callback_message(callback: CallbackQuery, client: Client) -> None:
+    text, reply_markup = await build_devices_view(client)
+
+    try:
+        await callback.message.edit_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest as exc:
+        # Например: сообщение не изменилось, слишком старое для редактирования
+        # или Telegram не дал отредактировать конкретный тип сообщения.
+        if "message is not modified" in str(exc).lower():
+            return
+        await callback.message.answer(text, reply_markup=reply_markup)
 
 
 async def start_checkout(callback: CallbackQuery, months: int):
@@ -692,15 +690,13 @@ async def cb_revoke_device(callback: CallbackQuery):
     client = await get_client_by_telegram_id(str(callback.from_user.id))
 
     if client is None:
-        await callback.message.answer("Профиль пока не найден. Нажмите /start")
-        await callback.answer()
+        await callback.answer("Профиль пока не найден. Нажмите /start", show_alert=True)
         return
 
     try:
         device_id = int(callback.data.split(":", 1)[1])
     except (IndexError, ValueError):
-        await callback.message.answer("Некорректный идентификатор устройства.")
-        await callback.answer()
+        await callback.answer("Некорректный идентификатор устройства.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -711,17 +707,13 @@ async def cb_revoke_device(callback: CallbackQuery):
                 device_id=device_id,
             )
         except DeviceNotFoundError:
-            await callback.message.answer("Устройство не найдено.")
-            await callback.answer()
+            await callback.answer("Устройство не найдено.", show_alert=True)
             return
 
-    await callback.message.answer(
-        "Устройство отключено:\n\n"
-        f"<b>{device.device_name or device.platform or 'device'}</b>\n"
-        f"ID: <code>{device.id}</code>",
-        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
-    )
-    await callback.answer("Устройство отключено")
+    await refresh_devices_callback_message(callback, client)
+
+    name = device.device_name or device.platform or "device"
+    await callback.answer(f"Отключено: {name}")
 
 
 @router.callback_query(F.data.startswith("delete_inactive_device:"))
@@ -729,15 +721,13 @@ async def cb_delete_inactive_device(callback: CallbackQuery):
     client = await get_client_by_telegram_id(str(callback.from_user.id))
 
     if client is None:
-        await callback.message.answer("Профиль пока не найден. Нажмите /start")
-        await callback.answer()
+        await callback.answer("Профиль пока не найден. Нажмите /start", show_alert=True)
         return
 
     try:
         device_id = int(callback.data.split(":", 1)[1])
     except (IndexError, ValueError):
-        await callback.message.answer("Некорректный идентификатор устройства.")
-        await callback.answer()
+        await callback.answer("Некорректный идентификатор устройства.", show_alert=True)
         return
 
     async with AsyncSessionLocal() as session:
@@ -748,24 +738,19 @@ async def cb_delete_inactive_device(callback: CallbackQuery):
                 device_id=device_id,
             )
         except DeviceNotFoundError:
-            await callback.message.answer("Устройство не найдено или уже удалено из списка.")
-            await callback.answer()
+            await callback.answer("Устройство не найдено или уже удалено.", show_alert=True)
             return
         except DeviceAccessError:
-            await callback.message.answer(
-                "Активное устройство нельзя удалить сразу. "
-                "Сначала нажмите «Отключить», затем удалите его из списка."
+            await callback.answer(
+                "Активное устройство сначала нужно отключить.",
+                show_alert=True,
             )
-            await callback.answer()
             return
 
-    await callback.message.answer(
-        "Устройство удалено из списка:\n\n"
-        f"<b>{device.device_name or device.platform or 'device'}</b>\n"
-        f"ID: <code>{device.id}</code>",
-        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
-    )
-    await callback.answer("Удалено")
+    await refresh_devices_callback_message(callback, client)
+
+    name = device.device_name or device.platform or "device"
+    await callback.answer(f"Удалено из списка: {name}")
 
 
 @router.callback_query(F.data == "show_happ_subscription")
