@@ -39,6 +39,10 @@ class AdminSetDeviceLimitStates(StatesGroup):
     waiting_for_limit = State()
 
 
+class AdminMessageClientStates(StatesGroup):
+    waiting_for_text = State()
+
+
 MAX_ADMIN_GRANT_DAYS = 3650
 DEFAULT_DEVICE_LIMIT = 3
 MAX_DEVICE_LIMIT = 50
@@ -72,12 +76,13 @@ def admin_client_actions_keyboard(client_id: int):
     builder.button(text="Все ссылки", callback_data=f"admin_all_links:{client_id}")
     builder.button(text="Отправить доступ заново", callback_data=f"admin_resend_access:{client_id}")
     builder.button(text="Отправить инструкции", callback_data=f"admin_send_instructions:{client_id}")
+    builder.button(text="Написать клиенту", callback_data=f"admin_write_client:{client_id}")
     builder.button(text="Выдать дни", callback_data=f"admin_grant_days:{client_id}")
     builder.button(text="Лимит устройств", callback_data=f"admin_set_device_limit:{client_id}")
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -557,6 +562,29 @@ async def send_instructions_to_client(bot: Bot, client: Client) -> tuple[bool, s
         return False, str(exc)
 
 
+async def send_custom_message_to_client(
+    bot: Bot,
+    client: Client,
+    admin_text: str,
+) -> tuple[bool, str]:
+    if not client.telegram_id:
+        return False, "У клиента не указан Telegram ID."
+
+    text = (
+        "Сообщение от Freeth:\n\n"
+        f"{admin_text.strip()}"
+    )
+
+    try:
+        await bot.send_message(
+            chat_id=int(client.telegram_id),
+            text=text,
+        )
+        return True, "ok"
+    except Exception as exc:
+        return False, format_telegram_send_error(exc)
+
+
 async def send_expiring_notice(bot: Bot, client: Client) -> bool:
     try:
         paid_until = client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "скоро"
@@ -926,6 +954,76 @@ async def process_admin_set_device_limit(message: Message, state: FSMContext):
         f"Активных устройств: <b>{limit_info.active_devices}</b>\n"
         f"Новый лимит: <b>{limit_info.max_devices}</b>",
         parse_mode="HTML",
+        reply_markup=admin_client_actions_keyboard(client.id),
+    )
+
+
+@router.message(AdminMessageClientStates.waiting_for_text)
+async def process_admin_message_to_client(message: Message, state: FSMContext, bot: Bot):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Недостаточно прав.")
+        return
+
+    raw_text = (message.text or "").strip()
+
+    if raw_text.lower() in {"отмена", "/cancel", "cancel"}:
+        await state.clear()
+        await message.answer("Отправка сообщения клиенту отменена.")
+        return
+
+    if not raw_text:
+        await message.answer(
+            "Введите текст сообщения для клиента.\n"
+            "Чтобы отменить, напишите <b>Отмена</b>."
+        )
+        return
+
+    if len(raw_text) > 3500:
+        await message.answer(
+            "Сообщение слишком длинное. Сократите текст до 3500 символов.\n"
+            "Чтобы отменить, напишите <b>Отмена</b>."
+        )
+        return
+
+    data = await state.get_data()
+    client_id = data.get("admin_message_client_id")
+
+    if not client_id:
+        await state.clear()
+        await message.answer("Сессия отправки сообщения устарела. Откройте клиента заново.")
+        return
+
+    client = await get_client_by_db_id(int(client_id))
+    if client is None:
+        await state.clear()
+        await message.answer("Клиент не найден.")
+        return
+
+    ok, details = await send_custom_message_to_client(
+        bot=bot,
+        client=client,
+        admin_text=raw_text,
+    )
+
+    await state.clear()
+
+    if not ok:
+        await message.answer(
+            "Не удалось отправить сообщение клиенту.\n\n"
+            f"Клиент: <b>{html_escape(client.full_name or 'Без имени')}</b>\n"
+            f"ID: <code>{client.id}</code>\n"
+            f"TG: <code>{html_escape(client.telegram_id or '—')}</code>\n"
+            f"Причина: {html_escape(details)}",
+            reply_markup=admin_client_actions_keyboard(client.id),
+        )
+        return
+
+    await message.answer(
+        "Сообщение отправлено клиенту.\n\n"
+        f"Клиент: <b>{html_escape(client.full_name or 'Без имени')}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"TG: <code>{html_escape(client.telegram_id or '—')}</code>",
         reply_markup=admin_client_actions_keyboard(client.id),
     )
 
@@ -1398,6 +1496,46 @@ async def cb_admin_set_device_limit(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         format_device_limit_admin_text(client, limit_info),
         parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_write_client:"))
+async def cb_admin_write_client(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    if not client.telegram_id:
+        await callback.message.answer(
+            "У клиента не указан Telegram ID, отправить сообщение нельзя.",
+            reply_markup=admin_client_actions_keyboard(client.id),
+        )
+        await callback.answer()
+        return
+
+    await state.clear()
+    await state.set_state(AdminMessageClientStates.waiting_for_text)
+    await state.update_data(admin_message_client_id=client.id)
+
+    await callback.message.answer(
+        "<b>Сообщение клиенту от имени бота</b>\n\n"
+        f"Клиент: <b>{html_escape(client.full_name or 'Без имени')}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"TG: <code>{html_escape(client.telegram_id)}</code>\n\n"
+        "Напишите текст сообщения следующим сообщением.\n\n"
+        "Клиент получит его так:\n"
+        "<code>Сообщение от Freeth:</code>\n"
+        "<code>ваш текст</code>\n\n"
+        "Чтобы отменить, напишите <b>Отмена</b>."
     )
     await callback.answer()
 
