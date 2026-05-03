@@ -576,7 +576,30 @@ async def send_expiring_notice(bot: Bot, client: Client) -> bool:
         return False
 
 
-async def send_expired_notice(bot: Bot, client: Client) -> bool:
+def format_telegram_send_error(exc: Exception) -> str:
+    error_type = type(exc).__name__
+    error_text = str(exc)
+    normalized = error_text.lower()
+
+    if "bot was blocked by the user" in normalized:
+        return "пользователь заблокировал бота"
+
+    if "chat not found" in normalized:
+        return "чат не найден: пользователь не запускал бота или Telegram ID неверный"
+
+    if "user is deactivated" in normalized:
+        return "аккаунт Telegram деактивирован"
+
+    if "forbidden" in normalized:
+        return f"Telegram запретил отправку: {error_text}"
+
+    if "bad request" in normalized:
+        return f"ошибка Telegram-запроса: {error_text}"
+
+    return f"{error_type}: {error_text}"
+
+
+async def send_expired_notice(bot: Bot, client: Client) -> tuple[bool, str]:
     try:
         text = (
             f"Здравствуйте, {client.full_name or 'пользователь'}!\n\n"
@@ -589,9 +612,9 @@ async def send_expired_notice(bot: Bot, client: Client) -> bool:
             text=text,
             reply_markup=renewal_keyboard(),
         )
-        return True
-    except Exception:
-        return False
+        return True, "ok"
+    except Exception as exc:
+        return False, format_telegram_send_error(exc)
 
 
 async def get_admin_stats():
@@ -1054,26 +1077,53 @@ async def cb_admin_notify_expired(callback: CallbackQuery, bot: Bot):
     sent = 0
     failed = 0
     skipped = 0
+    sent_rows: list[str] = []
+    failed_rows: list[str] = []
+    skipped_rows: list[str] = []
 
     for client in clients:
+        client_label = (
+            f"ID={client.id} | tg={client.telegram_id or '—'} | "
+            f"{client.full_name or 'Без имени'}"
+        )
+
         if not client.telegram_id:
             skipped += 1
+            skipped_rows.append(f"• {client_label} — нет Telegram ID")
             continue
 
-        ok = await send_expired_notice(bot, client)
+        ok, details = await send_expired_notice(bot, client)
 
         if ok:
             sent += 1
+            sent_rows.append(f"• {client_label}")
             await mark_expired_notice_sent(client.id)
         else:
             failed += 1
+            failed_rows.append(f"• {client_label} — {details}")
 
-    await callback.message.answer(
-        f"Готово.\n\n"
-        f"Сообщений отправлено: {sent}\n"
-        f"Ошибок: {failed}\n"
-        f"Пропущено без Telegram ID: {skipped}"
-    )
+    lines = [
+        "Готово.",
+        "",
+        f"Сообщений отправлено: {sent}",
+        f"Ошибок: {failed}",
+        f"Пропущено без Telegram ID: {skipped}",
+    ]
+
+    if sent_rows:
+        lines.extend(["", "Отправлено:", *sent_rows[:20]])
+
+    if failed_rows:
+        lines.extend(["", "Ошибки:", *failed_rows[:20]])
+
+    if skipped_rows:
+        lines.extend(["", "Пропущено:", *skipped_rows[:20]])
+
+    text = "\n".join(lines)
+
+    for chunk in split_admin_text(text, limit=3500):
+        await callback.message.answer(chunk)
+
     await callback.answer()
 
 
