@@ -104,7 +104,7 @@ class DeviceService:
     async def get_max_devices_for_client(
         db: AsyncSession,
         client: Client,
-        default_max_devices: int = 1,
+        default_max_devices: int = 3,
     ) -> int:
         """
         Пока fallback-логика простая:
@@ -134,7 +134,7 @@ class DeviceService:
     async def get_device_limit_info(
         db: AsyncSession,
         client: Client,
-        default_max_devices: int = 1,
+        default_max_devices: int = 3,
     ) -> DeviceLimitInfo:
         max_devices = await DeviceService.get_max_devices_for_client(
             db=db,
@@ -157,7 +157,7 @@ class DeviceService:
         db: AsyncSession,
         client: Client,
         device_uid: str,
-        default_max_devices: int = 1,
+        default_max_devices: int = 3,
     ) -> None:
         existing_device = await DeviceService.get_device_by_uid(
             db=db,
@@ -188,7 +188,7 @@ class DeviceService:
         device_name: Optional[str] = None,
         app_version: Optional[str] = None,
         os_version: Optional[str] = None,
-        default_max_devices: int = 1,
+        default_max_devices: int = 3,
     ) -> Device:
         await DeviceService.ensure_device_slot_available(
             db=db,

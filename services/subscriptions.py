@@ -211,7 +211,7 @@ async def get_plan_by_code(session: AsyncSession, plan_code: str) -> Optional[Pl
 async def get_max_devices_for_client(
     client: Client,
     db: Optional[AsyncSession] = None,
-    default_max_devices: int = 1,
+    default_max_devices: int = 3,
 ) -> int:
     notes_value = _extract_max_devices_from_notes(client.notes)
     if notes_value:
@@ -235,7 +235,7 @@ async def get_max_devices_for_client(
 async def get_client_subscription_status(
     client: Client,
     db: Optional[AsyncSession] = None,
-    default_max_devices: int = 1,
+    default_max_devices: int = 3,
 ) -> SubscriptionStatus:
     now = _utcnow()
 
@@ -280,7 +280,7 @@ async def get_client_subscription_status(
 
 async def get_subscription_status_by_client_id(
     client_id: int,
-    default_max_devices: int = 1,
+    default_max_devices: int = 3,
 ) -> Optional[SubscriptionStatus]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -299,7 +299,7 @@ async def get_subscription_status_by_client_id(
 
 async def get_subscription_status_by_telegram_id(
     telegram_id: str,
-    default_max_devices: int = 1,
+    default_max_devices: int = 3,
 ) -> Optional[SubscriptionStatus]:
     async with AsyncSessionLocal() as session:
         result = await session.execute(

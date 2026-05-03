@@ -16,6 +16,7 @@ from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, SubscriptionHistory, VpnNode
 from services.client_access import create_vpn_access_for_client
+from services.device_service import DeviceService
 from services.payments import (
     activate_subscription_days_by_client_id,
     deactivate_subscription,
@@ -30,7 +31,13 @@ class AdminGrantDaysStates(StatesGroup):
     waiting_for_days = State()
 
 
+class AdminSetDeviceLimitStates(StatesGroup):
+    waiting_for_limit = State()
+
+
 MAX_ADMIN_GRANT_DAYS = 3650
+DEFAULT_DEVICE_LIMIT = 3
+MAX_DEVICE_LIMIT = 50
 
 
 def is_admin(user_id: int) -> bool:
@@ -62,10 +69,11 @@ def admin_client_actions_keyboard(client_id: int):
     builder.button(text="Отправить доступ заново", callback_data=f"admin_resend_access:{client_id}")
     builder.button(text="Отправить инструкции", callback_data=f"admin_send_instructions:{client_id}")
     builder.button(text="Выдать дни", callback_data=f"admin_grant_days:{client_id}")
+    builder.button(text="Лимит устройств", callback_data=f"admin_set_device_limit:{client_id}")
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -130,6 +138,7 @@ def format_client_card(client: Client) -> str:
         f"Активен: {active_text}\n"
         f"Оплачено: {paid_text}\n"
         f"Trial использован: {trial_used}\n"
+        f"Лимит устройств: {get_client_device_limit_from_notes(client)}\n"
         f"Активно до: {paid_until_text}\n"
         f"Осталось: {days_left_text}\n"
         f"Ссылка VLESS: {'Есть' if client.subscription_link else 'Нет'}\n"
@@ -189,6 +198,104 @@ async def get_client_by_db_id(client_id: int):
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Client).where(Client.id == client_id))
         return result.scalar_one_or_none()
+
+
+def parse_client_notes(notes: str | None) -> tuple[dict[str, str], list[str]]:
+    data: dict[str, str] = {}
+    raw_lines: list[str] = []
+
+    if not notes:
+        return data, raw_lines
+
+    for line in notes.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "=" in stripped:
+            key, value = stripped.split("=", 1)
+            data[key.strip()] = value.strip()
+        else:
+            raw_lines.append(stripped)
+
+    return data, raw_lines
+
+
+def dump_client_notes(data: dict[str, str], raw_lines: list[str]) -> str | None:
+    lines = [f"{key}={data[key]}" for key in sorted(data.keys())]
+    lines.extend(raw_lines)
+    return "\n".join(lines) if lines else None
+
+
+def get_note_int(notes: str | None, key: str, default: int) -> int:
+    data, _ = parse_client_notes(notes)
+    value = data.get(key)
+
+    if not value:
+        return default
+
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+
+    return parsed if parsed > 0 else default
+
+
+def get_client_device_limit_from_notes(client: Client) -> int:
+    return get_note_int(client.notes, "max_devices", DEFAULT_DEVICE_LIMIT)
+
+
+async def get_client_device_limit_state(client_id: int):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Client).where(Client.id == client_id))
+        client = result.scalar_one_or_none()
+        if not client:
+            return None, None
+
+        limit_info = await DeviceService.get_device_limit_info(
+            db=session,
+            client=client,
+            default_max_devices=DEFAULT_DEVICE_LIMIT,
+        )
+        return client, limit_info
+
+
+async def update_client_device_limit(client_id: int, max_devices: int):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(Client).where(Client.id == client_id))
+        client = result.scalar_one_or_none()
+        if not client:
+            return None, None
+
+        data, raw_lines = parse_client_notes(client.notes)
+        data["max_devices"] = str(max_devices)
+        client.notes = dump_client_notes(data, raw_lines)
+        client.updated_at = datetime.utcnow()
+        await session.commit()
+        await session.refresh(client)
+
+        limit_info = await DeviceService.get_device_limit_info(
+            db=session,
+            client=client,
+            default_max_devices=DEFAULT_DEVICE_LIMIT,
+        )
+        return client, limit_info
+
+
+def format_device_limit_admin_text(client: Client, limit_info) -> str:
+    return (
+        "<b>Лимит устройств клиента</b>\n\n"
+        f"ID в БД: <code>{client.id}</code>\n"
+        f"Telegram ID: <code>{client.telegram_id or '—'}</code>\n"
+        f"Имя: {client.full_name or 'Не указано'}\n\n"
+        f"Текущий лимит: <b>{limit_info.max_devices}</b>\n"
+        f"Активных устройств: <b>{limit_info.active_devices}</b>\n\n"
+        f"Введите новый лимит от <b>1</b> до <b>{MAX_DEVICE_LIMIT}</b>.\n"
+        "Например: <code>3</code>, <code>5</code>, <code>10</code>.\n\n"
+        "Если уменьшить лимит ниже текущего количества активных устройств, "
+        "уже активные устройства не отключатся автоматически, но новые входы будут запрещены, "
+        "пока клиент не отключит лишние устройства."
+    )
 
 
 def html_escape(value) -> str:
@@ -612,6 +719,63 @@ async def cmd_admin_links(message: Message):
     await send_admin_all_links(message, clients[0])
 
 
+@router.message(Command("set_devices"))
+async def cmd_set_devices(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.")
+        return
+
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.answer(
+            "Использование:\n\n"
+            "<code>/set_devices telegram_id лимит</code>\n"
+            "<code>/set_devices client_id лимит</code>\n\n"
+            "Пример:\n"
+            "<code>/set_devices 766928002 3</code>"
+        )
+        return
+
+    query = parts[1].strip()
+    raw_limit = parts[2].strip()
+
+    if not raw_limit.isdigit():
+        await message.answer("Лимит должен быть целым числом.")
+        return
+
+    new_limit = int(raw_limit)
+    if new_limit <= 0 or new_limit > MAX_DEVICE_LIMIT:
+        await message.answer(f"Введите лимит от 1 до {MAX_DEVICE_LIMIT}.")
+        return
+
+    clients = await find_clients(query)
+    if not clients:
+        await message.answer("Клиенты не найдены.")
+        return
+
+    if len(clients) > 1:
+        await message.answer(
+            f"Найдено клиентов: {len(clients)}. Выберите нужного:",
+            reply_markup=admin_search_results_keyboard(clients),
+        )
+        return
+
+    client, limit_info = await update_client_device_limit(clients[0].id, new_limit)
+    if not client:
+        await message.answer("Клиент не найден.")
+        return
+
+    await message.answer(
+        "Лимит устройств обновлен.\n\n"
+        f"Клиент: <b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"Активных устройств: <b>{limit_info.active_devices}</b>\n"
+        f"Новый лимит: <b>{limit_info.max_devices}</b>",
+        parse_mode="HTML",
+        reply_markup=admin_client_actions_keyboard(client.id),
+    )
+
+
 @router.message(AdminGrantDaysStates.waiting_for_days)
 async def process_admin_grant_days(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
@@ -664,6 +828,61 @@ async def process_admin_grant_days(message: Message, state: FSMContext):
     await message.answer(
         f"Доступ выдан на <b>{days}</b> дн.\n\n{format_client_card(updated)}",
         reply_markup=admin_client_actions_keyboard(updated.id),
+    )
+
+
+@router.message(AdminSetDeviceLimitStates.waiting_for_limit)
+async def process_admin_set_device_limit(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        await message.answer("Недостаточно прав.")
+        return
+
+    raw_text = (message.text or "").strip()
+    if raw_text.lower() in {"отмена", "/cancel", "cancel"}:
+        await state.clear()
+        await message.answer("Изменение лимита устройств отменено.")
+        return
+
+    if not raw_text.isdigit():
+        await message.answer(
+            f"Введите целое число от 1 до {MAX_DEVICE_LIMIT}.\n"
+            "Чтобы отменить, напишите <b>Отмена</b>.",
+            parse_mode="HTML",
+        )
+        return
+
+    new_limit = int(raw_text)
+    if new_limit <= 0 or new_limit > MAX_DEVICE_LIMIT:
+        await message.answer(
+            f"Введите число от 1 до {MAX_DEVICE_LIMIT}.\n"
+            "Чтобы отменить, напишите <b>Отмена</b>.",
+            parse_mode="HTML",
+        )
+        return
+
+    data = await state.get_data()
+    client_id = data.get("admin_device_limit_client_id")
+    if not client_id:
+        await state.clear()
+        await message.answer("Сессия изменения лимита устарела. Откройте клиента заново.")
+        return
+
+    client, limit_info = await update_client_device_limit(int(client_id), new_limit)
+    await state.clear()
+
+    if not client:
+        await message.answer("Клиент не найден.")
+        return
+
+    await message.answer(
+        "Лимит устройств обновлен.\n\n"
+        f"Клиент: <b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"Активных устройств: <b>{limit_info.active_devices}</b>\n"
+        f"Новый лимит: <b>{limit_info.max_devices}</b>",
+        parse_mode="HTML",
+        reply_markup=admin_client_actions_keyboard(client.id),
     )
 
 
@@ -1069,6 +1288,31 @@ async def cb_admin_send_instructions(callback: CallbackQuery, bot: Bot):
         f"(ID {client.id})."
     )
     await callback.answer("Отправлено")
+
+
+@router.callback_query(F.data.startswith("admin_set_device_limit:"))
+async def cb_admin_set_device_limit(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client, limit_info = await get_client_device_limit_state(client_id)
+
+    if not client:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    await state.clear()
+    await state.set_state(AdminSetDeviceLimitStates.waiting_for_limit)
+    await state.update_data(admin_device_limit_client_id=client.id)
+
+    await callback.message.answer(
+        format_device_limit_admin_text(client, limit_info),
+        parse_mode="HTML",
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("admin_grant_days:"))

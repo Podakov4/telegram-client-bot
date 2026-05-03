@@ -24,6 +24,7 @@ from database.models import (
     YooKassaPayment,
 )
 from services.email_sender import send_login_code_email
+from services.device_service import DeviceLimitExceededError, DeviceService
 
 ACCESS_TOKEN_TTL_MINUTES = 30
 REFRESH_TOKEN_TTL_DAYS = 30
@@ -794,6 +795,31 @@ class AuthService:
         )
 
     @staticmethod
+    async def _ensure_device_limit_or_raise(
+        db: AsyncSession,
+        client: Client,
+        device_uid: str,
+    ) -> None:
+        try:
+            await DeviceService.ensure_device_slot_available(
+                db=db,
+                client=client,
+                device_uid=device_uid,
+                default_max_devices=3,
+            )
+        except DeviceLimitExceededError as exc:
+            limit_info = await DeviceService.get_device_limit_info(
+                db=db,
+                client=client,
+                default_max_devices=3,
+            )
+            raise AuthError(
+                "Превышен лимит устройств: "
+                f"{limit_info.active_devices}/{limit_info.max_devices}. "
+                "Отключите лишнее устройство или обратитесь к администратору."
+            ) from exc
+
+    @staticmethod
     async def _get_or_create_device(
         db: AsyncSession,
         client: Client,
@@ -814,6 +840,13 @@ class AuthService:
             if device.client_id != client.id:
                 raise AuthError("Device already belongs to another user")
 
+            if device.is_revoked or not device.is_active:
+                await AuthService._ensure_device_limit_or_raise(
+                    db=db,
+                    client=client,
+                    device_uid=device_uid,
+                )
+
             device.platform = platform
             device.device_name = device_name
             device.app_version = app_version
@@ -825,6 +858,12 @@ class AuthService:
             await db.commit()
             await db.refresh(device)
             return device
+
+        await AuthService._ensure_device_limit_or_raise(
+            db=db,
+            client=client,
+            device_uid=device_uid,
+        )
 
         device = Device(
             client_id=client.id,
