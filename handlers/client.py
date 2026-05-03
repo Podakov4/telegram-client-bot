@@ -33,7 +33,7 @@ from services.auth_service import (
     InvalidLoginCodeError,
 )
 from services.client_access import build_happ_import_url
-from services.device_service import DeviceNotFoundError, DeviceService
+from services.device_service import DeviceAccessError, DeviceNotFoundError, DeviceService
 from services.payments import activate_trial_subscription, create_checkout_payment
 from services.subscriptions import get_client_subscription_status, get_expiring_clients
 
@@ -197,13 +197,21 @@ def app_login_menu_keyboard():
 
 def devices_keyboard(devices: list):
     builder = InlineKeyboardBuilder()
+
     for device in devices:
-        status = "🟢" if device.is_active and not device.is_revoked else "⚪️"
         name = device.device_name or device.platform or "device"
-        builder.button(
-            text=f"{status} Отключить: {name}",
-            callback_data=f"revoke_device:{device.id}",
-        )
+
+        if device.is_active and not device.is_revoked:
+            builder.button(
+                text=f"🟢 Отключить: {name}",
+                callback_data=f"revoke_device:{device.id}",
+            )
+        else:
+            builder.button(
+                text=f"🗑 Удалить из списка: {name}",
+                callback_data=f"delete_inactive_device:{device.id}",
+            )
+
     builder.adjust(1)
     return builder.as_markup()
 
@@ -365,7 +373,7 @@ async def send_devices_message(message: Message, client: Client):
     body = "\n\n".join(format_device_line(device) for device in devices)
 
     await message.answer(
-        header + body + "\n\nНажмите кнопку ниже, чтобы отключить ненужное устройство.",
+        header + body + "\n\nАктивное устройство можно отключить. Отключенное устройство можно удалить из списка.",
         reply_markup=devices_keyboard(devices),
     )
 
@@ -397,7 +405,7 @@ async def send_devices_callback_message(callback: CallbackQuery, client: Client)
     body = "\n\n".join(format_device_line(device) for device in devices)
 
     await callback.message.answer(
-        header + body + "\n\nНажмите кнопку ниже, чтобы отключить ненужное устройство.",
+        header + body + "\n\nАктивное устройство можно отключить. Отключенное устройство можно удалить из списка.",
         reply_markup=devices_keyboard(devices),
     )
     await callback.answer()
@@ -714,6 +722,50 @@ async def cb_revoke_device(callback: CallbackQuery):
         reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
     await callback.answer("Устройство отключено")
+
+
+@router.callback_query(F.data.startswith("delete_inactive_device:"))
+async def cb_delete_inactive_device(callback: CallbackQuery):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None:
+        await callback.message.answer("Профиль пока не найден. Нажмите /start")
+        await callback.answer()
+        return
+
+    try:
+        device_id = int(callback.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        await callback.message.answer("Некорректный идентификатор устройства.")
+        await callback.answer()
+        return
+
+    async with AsyncSessionLocal() as session:
+        try:
+            device = await DeviceService.delete_inactive_device(
+                db=session,
+                client_id=client.id,
+                device_id=device_id,
+            )
+        except DeviceNotFoundError:
+            await callback.message.answer("Устройство не найдено или уже удалено из списка.")
+            await callback.answer()
+            return
+        except DeviceAccessError:
+            await callback.message.answer(
+                "Активное устройство нельзя удалить сразу. "
+                "Сначала нажмите «Отключить», затем удалите его из списка."
+            )
+            await callback.answer()
+            return
+
+    await callback.message.answer(
+        "Устройство удалено из списка:\n\n"
+        f"<b>{device.device_name or device.platform or 'device'}</b>\n"
+        f"ID: <code>{device.id}</code>",
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
+    )
+    await callback.answer("Удалено")
 
 
 @router.callback_query(F.data == "show_happ_subscription")

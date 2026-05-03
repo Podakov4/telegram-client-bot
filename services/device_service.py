@@ -285,6 +285,40 @@ class DeviceService:
         return device
 
     @staticmethod
+    async def delete_inactive_device(
+        db: AsyncSession,
+        client_id: int,
+        device_id: int,
+    ) -> Device:
+        """
+        Permanently remove an already disabled/revoked device from the user's visible list.
+
+        Active devices cannot be deleted directly: they must be revoked first so the
+        current session is closed safely.
+        """
+        device = await DeviceService.get_device_by_id(
+            db=db,
+            client_id=client_id,
+            device_id=device_id,
+        )
+
+        if device.is_active and not device.is_revoked:
+            raise DeviceAccessError(
+                "Active device cannot be deleted. Revoke it first."
+            )
+
+        result = await db.execute(
+            select(AppSession).where(AppSession.device_id == device.id)
+        )
+        sessions = result.scalars().all()
+        for session in sessions:
+            await db.delete(session)
+
+        await db.delete(device)
+        await db.commit()
+        return device
+
+    @staticmethod
     async def revoke_all_devices(
         db: AsyncSession,
         client_id: int,
