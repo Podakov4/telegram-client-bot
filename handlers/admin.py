@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from io import StringIO, BytesIO
 import csv
+import html
 
 import qrcode
 from aiogram import Router, F, Bot
@@ -13,7 +14,7 @@ from sqlalchemy import select, or_, func
 
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
-from database.models import Client, SubscriptionHistory
+from database.models import Client, ClientVpnAccess, SubscriptionHistory, VpnNode
 from services.client_access import create_vpn_access_for_client
 from services.payments import (
     activate_subscription_days_by_client_id,
@@ -53,16 +54,18 @@ def admin_dashboard_keyboard():
 def admin_client_actions_keyboard(client_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="Happ ссылка", callback_data=f"admin_happ:{client_id}")
-    builder.button(text="VLESS ссылка", callback_data=f"admin_vless:{client_id}")
+    builder.button(text="Открытая подписка", callback_data=f"admin_plain_sub:{client_id}")
+    builder.button(text="VLESS по серверам", callback_data=f"admin_vless:{client_id}")
     builder.button(text="QR", callback_data=f"admin_qr:{client_id}")
     builder.button(text="Все данные клиента", callback_data=f"admin_copy_all:{client_id}")
+    builder.button(text="Все ссылки", callback_data=f"admin_all_links:{client_id}")
     builder.button(text="Отправить доступ заново", callback_data=f"admin_resend_access:{client_id}")
     builder.button(text="Отправить инструкции", callback_data=f"admin_send_instructions:{client_id}")
     builder.button(text="Выдать дни", callback_data=f"admin_grant_days:{client_id}")
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(2, 2, 2, 1, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -186,6 +189,139 @@ async def get_client_by_db_id(client_id: int):
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(Client).where(Client.id == client_id))
         return result.scalar_one_or_none()
+
+
+def html_escape(value) -> str:
+    if value is None:
+        return "—"
+    return html.escape(str(value), quote=False)
+
+
+async def get_client_vpn_links_by_db_id(client_id: int) -> list[tuple[ClientVpnAccess, VpnNode]]:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(ClientVpnAccess, VpnNode)
+            .join(VpnNode, VpnNode.id == ClientVpnAccess.node_id)
+            .where(ClientVpnAccess.client_id == client_id)
+            .order_by(VpnNode.sort_order.asc(), VpnNode.id.asc(), ClientVpnAccess.id.asc())
+        )
+        return list(result.all())
+
+
+def format_plain_subscription_for_admin(client: Client) -> str:
+    plain_url = client.happ_subscription_url or "Не подготовлена"
+
+    return (
+        f"<b>Открытая подписка клиента</b>\n\n"
+        f"ID в БД: <code>{client.id}</code>\n"
+        f"Telegram ID: <code>{html_escape(client.telegram_id)}</code>\n"
+        f"Имя: {html_escape(client.full_name or 'Не указано')}\n\n"
+        f"<b>Незашифрованная subscription-ссылка</b>\n"
+        f"<code>{html_escape(plain_url)}</code>\n\n"
+        f"Эта ссылка открывает обычный список VLESS-ссылок через "
+        f"<code>/sub/token</code>."
+    )
+
+
+def format_server_links_for_admin(
+    client: Client,
+    pairs: list[tuple[ClientVpnAccess, VpnNode]],
+) -> str:
+    lines = [
+        "<b>Отдельные VLESS-ссылки по серверам</b>",
+        "",
+        f"ID в БД: <code>{client.id}</code>",
+        f"Telegram ID: <code>{html_escape(client.telegram_id)}</code>",
+        f"Имя: {html_escape(client.full_name or 'Не указано')}",
+        "",
+    ]
+
+    if not pairs:
+        lines.append("Отдельные серверные ссылки не найдены.")
+        return "\n".join(lines)
+
+    for access, node in pairs:
+        enabled_text = "включена" if access.is_enabled and node.is_active else "отключена"
+        link = access.subscription_link or "Не подготовлена"
+
+        lines.extend([
+            f"<b>{html_escape(node.display_name or node.name)} [{html_escape(node.code)}]</b>",
+            f"Домен: <code>{html_escape(node.vless_domain)}:{node.vless_public_port}</code>",
+            f"Path: <code>{html_escape(node.vless_path)}</code>",
+            f"SNI: <code>{html_escape(node.vless_sni)}</code>",
+            f"Статус: <b>{enabled_text}</b>",
+            f"<code>{html_escape(link)}</code>",
+            "",
+        ])
+
+    return "\n".join(lines).strip()
+
+
+def format_all_admin_links_bundle(
+    client: Client,
+    pairs: list[tuple[ClientVpnAccess, VpnNode]],
+) -> str:
+    active_text = "Да" if client.is_active else "Нет"
+    paid_text = "Да" if client.is_paid else "Нет"
+    paid_until_text = (
+        client.paid_until.strftime("%Y-%m-%d %H:%M") if client.paid_until else "Не указано"
+    )
+
+    header = (
+        f"<b>Все ссылки клиента</b>\n\n"
+        f"ID в БД: <code>{client.id}</code>\n"
+        f"Telegram ID: <code>{html_escape(client.telegram_id)}</code>\n"
+        f"Имя: {html_escape(client.full_name or 'Не указано')}\n"
+        f"Логин: <code>{html_escape(client.login or 'Не указан')}</code>\n"
+        f"Активен: {active_text}\n"
+        f"Оплачено: {paid_text}\n"
+        f"Активно до: {html_escape(paid_until_text)}\n\n"
+        f"<b>Happ / открытая подписка</b>\n"
+        f"<code>{html_escape(client.happ_subscription_url or 'Не подготовлена')}</code>\n\n"
+    )
+
+    return header + format_server_links_for_admin(client, pairs)
+
+
+def split_admin_text(text: str, limit: int = 3500) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    chunks = []
+    current = ""
+
+    for block in text.split("\n\n"):
+        candidate = f"{current}\n\n{block}" if current else block
+
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+
+        if len(block) <= limit:
+            current = block
+        else:
+            for i in range(0, len(block), limit):
+                chunks.append(block[i:i + limit])
+            current = ""
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+async def answer_admin_text(message: Message, text: str) -> None:
+    for chunk in split_admin_text(text):
+        await message.answer(chunk, parse_mode="HTML")
+
+
+async def send_admin_all_links(message: Message, client: Client) -> None:
+    pairs = await get_client_vpn_links_by_db_id(client.id)
+    text = format_all_admin_links_bundle(client, pairs)
+    await answer_admin_text(message, text)
 
 
 async def get_client_history(client_id: int):
@@ -437,6 +573,43 @@ async def cmd_find(message: Message):
         f"Найдено клиентов: {len(clients)}. Выберите нужного:",
         reply_markup=admin_search_results_keyboard(clients),
     )
+
+
+
+@router.message(Command("admin_links"))
+async def cmd_admin_links(message: Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Недостаточно прав.")
+        return
+
+    parts = message.text.split(maxsplit=1)
+
+    if len(parts) < 2:
+        await message.answer(
+            "Использование:\n\n"
+            "<code>/admin_links telegram_id</code>\n"
+            "<code>/admin_links client_id</code>\n"
+            "<code>/admin_links имя</code>\n\n"
+            "Пример:\n"
+            "<code>/admin_links 766928002</code>"
+        )
+        return
+
+    query = parts[1].strip()
+    clients = await find_clients(query)
+
+    if not clients:
+        await message.answer("Клиенты не найдены.")
+        return
+
+    if len(clients) > 1:
+        await message.answer(
+            f"Найдено клиентов: {len(clients)}. Выберите нужного:",
+            reply_markup=admin_search_results_keyboard(clients),
+        )
+        return
+
+    await send_admin_all_links(message, clients[0])
 
 
 @router.message(AdminGrantDaysStates.waiting_for_days)
@@ -716,6 +889,50 @@ async def cb_admin_happ(callback: CallbackQuery):
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("admin_plain_sub:"))
+async def cb_admin_plain_sub(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    await callback.message.answer(
+        format_plain_subscription_for_admin(client),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_all_links:"))
+async def cb_admin_all_links(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
+        await callback.answer()
+        return
+
+    pairs = await get_client_vpn_links_by_db_id(client.id)
+    text = format_all_admin_links_bundle(client, pairs)
+
+    for chunk in split_admin_text(text):
+        await callback.message.answer(chunk, parse_mode="HTML")
+
+    await callback.answer("Готово")
+
+
 @router.callback_query(F.data.startswith("admin_vless:"))
 async def cb_admin_vless(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
@@ -725,18 +942,17 @@ async def cb_admin_vless(callback: CallbackQuery):
     client_id = int(callback.data.split(":", 1)[1])
     client = await get_client_by_db_id(client_id)
 
-    if client is None or not client.subscription_link:
-        await callback.message.answer("Ссылка подключения не найдена.")
+    if client is None:
+        await callback.message.answer("Клиент не найден.")
         await callback.answer()
         return
 
-    await callback.message.answer(
-        f"<b>{client.full_name or 'Без имени'}</b>\n"
-        f"ID: <code>{client.id}</code>\n"
-        f"TG: <code>{client.telegram_id or '—'}</code>\n\n"
-        f"<code>{client.subscription_link}</code>",
-        parse_mode="HTML",
-    )
+    pairs = await get_client_vpn_links_by_db_id(client.id)
+    text = format_server_links_for_admin(client, pairs)
+
+    for chunk in split_admin_text(text):
+        await callback.message.answer(chunk, parse_mode="HTML")
+
     await callback.answer()
 
 
