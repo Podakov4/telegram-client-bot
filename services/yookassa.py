@@ -1,9 +1,8 @@
-import asyncio
 import os
 import uuid
 from decimal import Decimal, InvalidOperation
 
-import requests
+import httpx
 
 from config import (
     YOOKASSA_SHOP_ID,
@@ -72,7 +71,7 @@ def _build_receipt(item_name: str, amount: str):
     return receipt
 
 
-def _create_payment_sync(
+async def create_payment(
     amount: str,
     description: str,
     item_name: str,
@@ -108,17 +107,18 @@ def _create_payment_sync(
     if receipt:
         payload["receipt"] = receipt
 
-    response = requests.post(
-        YOOKASSA_API_URL,
-        json=payload,
-        headers=headers,
-        auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
-        timeout=30,
-    )
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            YOOKASSA_API_URL,
+            json=payload,
+            headers=headers,
+            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            timeout=30,
+        )
 
     try:
         response.raise_for_status()
-    except requests.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         raise RuntimeError(
             f"YooKassa create payment failed: "
             f"status={response.status_code}, body={response.text}"
@@ -127,40 +127,20 @@ def _create_payment_sync(
     return response.json()
 
 
-def _get_payment_sync(payment_id: str):
-    response = requests.get(
-        f"{YOOKASSA_API_URL}/{payment_id}",
-        auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
-        timeout=30,
-    )
+async def get_payment(payment_id: str):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{YOOKASSA_API_URL}/{payment_id}",
+            auth=(YOOKASSA_SHOP_ID, YOOKASSA_SECRET_KEY),
+            timeout=30,
+        )
 
     try:
         response.raise_for_status()
-    except requests.HTTPError as e:
+    except httpx.HTTPStatusError as e:
         raise RuntimeError(
             f"YooKassa get payment failed: "
             f"status={response.status_code}, body={response.text}"
         ) from e
 
     return response.json()
-
-
-async def create_payment(
-    amount: str,
-    description: str,
-    item_name: str,
-    telegram_id: str,
-    months: int,
-):
-    return await asyncio.to_thread(
-        _create_payment_sync,
-        amount,
-        description,
-        item_name,
-        telegram_id,
-        months,
-    )
-
-
-async def get_payment(payment_id: str):
-    return await asyncio.to_thread(_get_payment_sync, payment_id)

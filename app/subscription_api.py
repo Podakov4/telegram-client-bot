@@ -259,7 +259,7 @@ async def get_happ_import_link(token: str):
             raise HTTPException(status_code=404, detail="Happ subscription URL not found")
 
         try:
-            encrypted_url = encrypt_happ_subscription_url(client.happ_subscription_url)
+            encrypted_url = await encrypt_happ_subscription_url(client.happ_subscription_url)
         except HappCryptoError as e:
             raise HTTPException(status_code=502, detail=str(e))
 

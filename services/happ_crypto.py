@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
-from functools import lru_cache
 
-import requests
+import httpx
 
 HAPP_CRYPTO_API_URL = "https://crypto.happ.su/api-v2.php"
 
 logger = logging.getLogger(__name__)
+
+_cache: dict[str, str] = {}
+_CACHE_MAX = 2048
 
 
 class HappCryptoError(Exception):
@@ -40,16 +42,19 @@ def _extract_happ_link(payload) -> str | None:
     return None
 
 
-@lru_cache(maxsize=2048)
-def encrypt_happ_subscription_url(plain_url: str) -> str:
-    try:
-        response = requests.post(
-            HAPP_CRYPTO_API_URL,
-            json={"url": plain_url},
-            timeout=20,
-        )
-    except requests.RequestException as e:
-        raise HappCryptoError(f"Happ crypto API request failed: {e}") from e
+async def encrypt_happ_subscription_url(plain_url: str) -> str:
+    if plain_url in _cache:
+        return _cache[plain_url]
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                HAPP_CRYPTO_API_URL,
+                json={"url": plain_url},
+                timeout=20,
+            )
+        except httpx.RequestError as e:
+            raise HappCryptoError(f"Happ crypto API request failed: {e}") from e
 
     if response.status_code != 200:
         raise HappCryptoError(
@@ -58,6 +63,8 @@ def encrypt_happ_subscription_url(plain_url: str) -> str:
 
     text = response.text.strip()
     if text.startswith("happ://crypt"):
+        if len(_cache) < _CACHE_MAX:
+            _cache[plain_url] = text
         return text
 
     try:
@@ -67,6 +74,8 @@ def encrypt_happ_subscription_url(plain_url: str) -> str:
 
     link = _extract_happ_link(payload)
     if link:
+        if len(_cache) < _CACHE_MAX:
+            _cache[plain_url] = link
         return link
 
     raise HappCryptoError(f"Unexpected Happ crypto API response: {text[:500]}")

@@ -46,12 +46,12 @@ def build_happ_subscription_url(token: str) -> str:
     return f"{APP_BASE_URL}/sub/{token}"
 
 
-def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
+async def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
     if not plain_subscription_url:
         return None
 
     try:
-        return encrypt_happ_subscription_url(plain_subscription_url)
+        return await encrypt_happ_subscription_url(plain_subscription_url)
     except HappCryptoError:
         logger.exception("Failed to encrypt Happ subscription URL")
         return None
@@ -94,7 +94,7 @@ def build_node_config(node: VpnNode) -> NodeConfig:
     )
 
 
-def _serialize_legacy_vpn_access(client: Client) -> dict:
+async def _serialize_legacy_vpn_access(client: Client) -> dict:
     subscription_active = is_client_subscription_active(client)
     manual_url = client.subscription_link
     servers = []
@@ -111,7 +111,7 @@ def _serialize_legacy_vpn_access(client: Client) -> dict:
             }
         )
 
-    happ_import_url = build_happ_import_url(client.happ_subscription_url)
+    happ_import_url = await build_happ_import_url(client.happ_subscription_url)
 
     return {
         "access": bool(client.xui_uuid and client.subscription_link),
@@ -249,7 +249,7 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
     )
 
     if not pairs:
-        return _serialize_legacy_vpn_access(client)
+        return await _serialize_legacy_vpn_access(client)
 
     servers = []
     manual_urls = []
@@ -276,7 +276,7 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
         )
 
     manual_url = manual_urls[0] if manual_urls else None
-    happ_import_url = build_happ_import_url(client.happ_subscription_url)
+    happ_import_url = await build_happ_import_url(client.happ_subscription_url)
 
     return {
         "access": bool(manual_urls),
@@ -368,41 +368,41 @@ async def _update_existing_access_for_node(
         logger.warning("Cannot update access: paid_until is empty for client_id=%s", client.id)
         return False
 
-    manager = VLESSManager(node_config=build_node_config(node))
     paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
 
     if not access.xui_email and not access.xui_uuid:
         return False
 
-    try:
-        updated = manager.enable_client(
-            email=access.xui_email,
-            client_uuid=access.xui_uuid,
-            expiry_time_ms=paid_until_ts_ms,
-            total_gb=0,
-        )
-    except TypeError:
-        logger.exception("enable_client signature mismatch")
-        updated = False
-    except Exception:
-        logger.exception(
-            "Failed to enable/update existing client access client_id=%s node=%s",
-            client.id,
-            node.code,
-        )
-        updated = False
+    async with VLESSManager(node_config=build_node_config(node)) as manager:
+        try:
+            updated = await manager.enable_client(
+                email=access.xui_email,
+                client_uuid=access.xui_uuid,
+                expiry_time_ms=paid_until_ts_ms,
+                total_gb=0,
+            )
+        except TypeError:
+            logger.exception("enable_client signature mismatch")
+            updated = False
+        except Exception:
+            logger.exception(
+                "Failed to enable/update existing client access client_id=%s node=%s",
+                client.id,
+                node.code,
+            )
+            updated = False
 
-    if updated:
-        refreshed_link = manager.get_client_link(
-            email=access.xui_email,
-            client_uuid=access.xui_uuid,
-        )
-        if refreshed_link:
-            access.subscription_link = refreshed_link
-        access.is_enabled = True
-        access.updated_at = datetime.utcnow()
-        await session.flush()
-        return True
+        if updated:
+            refreshed_link = await manager.get_client_link(
+                email=access.xui_email,
+                client_uuid=access.xui_uuid,
+            )
+            if refreshed_link:
+                access.subscription_link = refreshed_link
+            access.is_enabled = True
+            access.updated_at = datetime.utcnow()
+            await session.flush()
+            return True
 
     return False
 
@@ -426,14 +426,14 @@ async def _ensure_access_for_node(
         if synced:
             return True
 
-    manager = VLESSManager(node_config=build_node_config(node))
-    created = manager.add_client(
-        telegram_id=external_identity,
-        full_name=client.full_name or client.email or xui_email,
-        xui_email=xui_email,
-        paid_until_ts_ms=paid_until_ts_ms,
-        total_gb=0,
-    )
+    async with VLESSManager(node_config=build_node_config(node)) as manager:
+        created = await manager.add_client(
+            telegram_id=external_identity,
+            full_name=client.full_name or client.email or xui_email,
+            xui_email=xui_email,
+            paid_until_ts_ms=paid_until_ts_ms,
+            total_gb=0,
+        )
 
     if not created:
         logger.error(
@@ -526,23 +526,22 @@ async def disable_vpn_access_for_client_id(client_id: int) -> bool:
                 access.is_enabled = False
                 continue
 
-            manager = VLESSManager(node_config=build_node_config(node))
-
-            try:
-                disabled = manager.disable_client(
-                    email=access.xui_email,
-                    client_uuid=access.xui_uuid,
-                )
-            except TypeError:
-                logger.exception("disable_client signature mismatch")
-                disabled = False
-            except Exception:
-                logger.exception(
-                    "Failed to disable VPN access for client_id=%s node=%s",
-                    client.id,
-                    node.code,
-                )
-                disabled = False
+            async with VLESSManager(node_config=build_node_config(node)) as manager:
+                try:
+                    disabled = await manager.disable_client(
+                        email=access.xui_email,
+                        client_uuid=access.xui_uuid,
+                    )
+                except TypeError:
+                    logger.exception("disable_client signature mismatch")
+                    disabled = False
+                except Exception:
+                    logger.exception(
+                        "Failed to disable VPN access for client_id=%s node=%s",
+                        client.id,
+                        node.code,
+                    )
+                    disabled = False
 
             overall_ok = overall_ok and disabled
             if disabled:

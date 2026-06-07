@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote
 
-import requests
+import httpx
 
 from config import (
     VLESS_DOMAIN,
@@ -78,7 +78,13 @@ class VLESSManager:
         self.password = password or self.node_config.password
         self.web_base_path = (self.node_config.web_base_path or "").strip("/")
         self.inbound_port = int(self.node_config.inbound_port)
-        self.session = requests.Session()
+        self.session = httpx.AsyncClient(follow_redirects=True)
+
+    async def __aenter__(self) -> VLESSManager:
+        return self
+
+    async def __aexit__(self, *args) -> None:
+        await self.session.aclose()
 
     def _join_url(self, path: str) -> str:
         base = self.panel_url.rstrip("/")
@@ -88,10 +94,10 @@ class VLESSManager:
     def _api_url(self, path: str) -> str:
         return self._join_url(f"/panel/api/inbounds/{path}")
 
-    def login(self) -> bool:
+    async def login(self) -> bool:
         try:
             login_url = self._join_url("/login")
-            response = self.session.post(
+            response = await self.session.post(
                 login_url,
                 json={
                     "username": self.username,
@@ -117,8 +123,8 @@ class VLESSManager:
             logger.exception("Ошибка логина в 3x-ui: %s", e)
             return False
 
-    def _list_inbounds(self) -> list[dict]:
-        response = self.session.get(self._api_url("list"), timeout=15)
+    async def _list_inbounds(self) -> list[dict]:
+        response = await self.session.get(self._api_url("list"), timeout=15)
         logger.info("inbounds list status=%s", response.status_code)
 
         if response.status_code != 200:
@@ -132,7 +138,7 @@ class VLESSManager:
 
         return data.get("obj", [])
 
-    def find_inbound_by_port(self, port: int) -> Optional[int]:
+    async def find_inbound_by_port(self, port: int) -> Optional[int]:
         """
         В твоей версии x-ui API inbound list может возвращать port=0 и protocol=""
         даже для рабочего inbound. Поэтому:
@@ -140,7 +146,7 @@ class VLESSManager:
         2. если не нашли, берём первый inbound, у которого есть clients в settings
         """
         try:
-            inbounds = self._list_inbounds()
+            inbounds = await self._list_inbounds()
 
             for inbound in inbounds:
                 inbound_port = inbound.get("port")
@@ -176,9 +182,9 @@ class VLESSManager:
             logger.exception("Ошибка поиска inbound: %s", e)
             return None
 
-    def get_inbound(self, inbound_id: int) -> Optional[dict]:
+    async def get_inbound(self, inbound_id: int) -> Optional[dict]:
         try:
-            response = self.session.get(self._api_url(f"get/{inbound_id}"), timeout=15)
+            response = await self.session.get(self._api_url(f"get/{inbound_id}"), timeout=15)
             logger.info("get inbound status=%s", response.status_code)
 
             if response.status_code != 200:
@@ -203,8 +209,8 @@ class VLESSManager:
             settings = settings_raw
         return settings.get("clients", [])
 
-    def _save_clients_to_inbound(self, inbound_id: int, clients: list[dict]) -> bool:
-        inbound = self.get_inbound(inbound_id)
+    async def _save_clients_to_inbound(self, inbound_id: int, clients: list[dict]) -> bool:
+        inbound = await self.get_inbound(inbound_id)
         if not inbound:
             logger.error("Не удалось получить полный inbound для сохранения clients")
             return False
@@ -236,7 +242,7 @@ class VLESSManager:
 
         try:
             update_url = self._api_url(f"update/{inbound_id}")
-            response = self.session.post(update_url, json=payload, timeout=20)
+            response = await self.session.post(update_url, json=payload, timeout=20)
 
             logger.info("update inbound status=%s", response.status_code)
 
@@ -255,20 +261,20 @@ class VLESSManager:
             logger.exception("Ошибка сохранения inbound: %s", e)
             return False
 
-    def find_client(
+    async def find_client(
         self,
         *,
         email: str | None = None,
         client_uuid: str | None = None,
     ) -> tuple[int, dict, list[dict]] | None:
-        if not self.login():
+        if not await self.login():
             return None
 
-        inbound_id = self.find_inbound_by_port(self.inbound_port)
+        inbound_id = await self.find_inbound_by_port(self.inbound_port)
         if not inbound_id:
             return None
 
-        inbound = self.get_inbound(inbound_id)
+        inbound = await self.get_inbound(inbound_id)
         if not inbound:
             return None
 
@@ -282,13 +288,13 @@ class VLESSManager:
 
         return None
 
-    def client_exists(
+    async def client_exists(
         self,
         *,
         email: str | None = None,
         client_uuid: str | None = None,
     ) -> bool:
-        return self.find_client(email=email, client_uuid=client_uuid) is not None
+        return await self.find_client(email=email, client_uuid=client_uuid) is not None
 
     def build_vless_link(
         self,
@@ -309,7 +315,7 @@ class VLESSManager:
             f"#{title_encoded}"
         )
 
-    def add_client(
+    async def add_client(
         self,
         telegram_id: str,
         full_name: str,
@@ -317,19 +323,19 @@ class VLESSManager:
         paid_until_ts_ms: int = 0,
         total_gb: int = 0,
     ) -> tuple[str, str, str] | None:
-        if not self.login():
+        if not await self.login():
             return None
 
-        inbound_id = self.find_inbound_by_port(self.inbound_port)
+        inbound_id = await self.find_inbound_by_port(self.inbound_port)
         if not inbound_id:
             return None
 
-        existing = self.find_client(email=xui_email)
+        existing = await self.find_client(email=xui_email)
         if existing:
             _, client_obj, _ = existing
             logger.info("Client already exists in 3x-ui email=%s", xui_email)
 
-            self.update_client(
+            await self.update_client(
                 email=xui_email,
                 enable=True,
                 expiry_time_ms=paid_until_ts_ms,
@@ -365,7 +371,7 @@ class VLESSManager:
 
         try:
             add_url = self._api_url("addClient")
-            response = self.session.post(add_url, json=payload, timeout=20)
+            response = await self.session.post(add_url, json=payload, timeout=20)
 
             logger.info("addClient status=%s", response.status_code)
 
@@ -386,7 +392,7 @@ class VLESSManager:
             logger.exception("Ошибка создания клиента в 3x-ui: %s", e)
             return None
 
-    def update_client(
+    async def update_client(
         self,
         *,
         email: str | None = None,
@@ -395,7 +401,7 @@ class VLESSManager:
         expiry_time_ms: int | None = None,
         total_gb: int | None = None,
     ) -> bool:
-        found = self.find_client(email=email, client_uuid=client_uuid)
+        found = await self.find_client(email=email, client_uuid=client_uuid)
         if not found:
             logger.error("Клиент в 3x-ui не найден email=%s uuid=%s", email, client_uuid)
             return False
@@ -424,21 +430,21 @@ class VLESSManager:
             logger.error("Совпадающий клиент для update не найден email=%s uuid=%s", email, client_uuid)
             return False
 
-        return self._save_clients_to_inbound(inbound_id, clients)
+        return await self._save_clients_to_inbound(inbound_id, clients)
 
-    def disable_client(
+    async def disable_client(
         self,
         *,
         email: str | None = None,
         client_uuid: str | None = None,
     ) -> bool:
-        return self.update_client(
+        return await self.update_client(
             email=email,
             client_uuid=client_uuid,
             enable=False,
         )
 
-    def enable_client(
+    async def enable_client(
         self,
         *,
         email: str | None = None,
@@ -446,7 +452,7 @@ class VLESSManager:
         expiry_time_ms: int | None = None,
         total_gb: int | None = None,
     ) -> bool:
-        return self.update_client(
+        return await self.update_client(
             email=email,
             client_uuid=client_uuid,
             enable=True,
@@ -454,13 +460,13 @@ class VLESSManager:
             total_gb=total_gb,
         )
 
-    def get_client_link(
+    async def get_client_link(
         self,
         *,
         email: str | None = None,
         client_uuid: str | None = None,
     ) -> Optional[str]:
-        found = self.find_client(email=email, client_uuid=client_uuid)
+        found = await self.find_client(email=email, client_uuid=client_uuid)
         if not found:
             return None
 
@@ -471,7 +477,7 @@ class VLESSManager:
 
         return self.build_vless_link(uuid_value)
 
-    def ensure_client_active(
+    async def ensure_client_active(
         self,
         *,
         email: str | None = None,
@@ -479,7 +485,7 @@ class VLESSManager:
         expiry_time_ms: int | None = None,
         total_gb: int | None = None,
     ) -> bool:
-        return self.enable_client(
+        return await self.enable_client(
             email=email,
             client_uuid=client_uuid,
             expiry_time_ms=expiry_time_ms,

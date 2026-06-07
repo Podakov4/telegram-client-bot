@@ -762,7 +762,7 @@ async def cb_show_happ_subscription(callback: CallbackQuery):
         await callback.answer()
         return
 
-    happ_link = build_happ_import_url(client.happ_subscription_url) or client.happ_subscription_url
+    happ_link = await build_happ_import_url(client.happ_subscription_url) or client.happ_subscription_url
 
     await callback.message.answer(
         "Ссылка для подключения в Happ:\n\n"
