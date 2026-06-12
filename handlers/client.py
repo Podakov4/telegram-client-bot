@@ -769,7 +769,7 @@ async def cb_show_happ_subscription(callback: CallbackQuery):
     await callback.message.answer(
         "Ссылка для подключения в Happ:\n\n"
         f"<code>{happ_link}</code>\n\n"
-        "Откройте Happ и импортируйте эту ссылку как подписку.",
+        "Скопируйте ссылку, откройте Happ → раздел <b>Подписки</b> → нажмите <b>+</b> и вставьте ссылку.",
         parse_mode="HTML",
         reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )

@@ -53,9 +53,7 @@ def build_hiddify_import_url(subscription_url: str | None) -> str | None:
 
 
 def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
-    if not plain_subscription_url:
-        return None
-    return f"happ://install-sub?url={url_quote(plain_subscription_url, safe='')}"
+    return plain_subscription_url or None
 
 
 def ensure_happ_subscription_for_client(client: Client) -> None:
