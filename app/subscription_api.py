@@ -22,11 +22,11 @@ from services.auth_service import (
     RevokedSessionError,
 )
 from services.client_access import (
+    build_happ_import_url,
     get_client_subscription_links_by_client_id,
     get_client_vpn_access_by_client_id,
 )
 from services.device_service import DeviceNotFoundError, DeviceService
-from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
 from services.payments import create_checkout_payment_for_client, process_successful_payment, verify_payment_succeeded
 from services.subscriptions import (
     get_client_subscription_status,
@@ -258,14 +258,11 @@ async def get_happ_import_link(token: str):
         if not client.happ_subscription_url:
             raise HTTPException(status_code=404, detail="Happ subscription URL not found")
 
-        try:
-            encrypted_url = await encrypt_happ_subscription_url(client.happ_subscription_url)
-        except HappCryptoError as e:
-            raise HTTPException(status_code=502, detail=str(e))
+        import_url = build_happ_import_url(client.happ_subscription_url)
 
         return {
             "ok": True,
-            "url": encrypted_url,
+            "url": import_url,
             "plain_url": client.happ_subscription_url,
         }
 

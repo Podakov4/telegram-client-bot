@@ -15,7 +15,6 @@ from config import APP_BASE_URL
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, VpnNode
 from services.vless import DEFAULT_NODE_CONFIG, NodeConfig, VLESSManager
-from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
 
 logger = logging.getLogger(__name__)
 
@@ -53,15 +52,10 @@ def build_hiddify_import_url(subscription_url: str | None) -> str | None:
     return f"hiddify://install-sub?url={url_quote(subscription_url, safe='')}"
 
 
-async def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
+def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
     if not plain_subscription_url:
         return None
-
-    try:
-        return await encrypt_happ_subscription_url(plain_subscription_url)
-    except HappCryptoError:
-        logger.exception("Failed to encrypt Happ subscription URL")
-        return None
+    return f"happ://import?url={url_quote(plain_subscription_url, safe='')}"
 
 
 def ensure_happ_subscription_for_client(client: Client) -> None:
@@ -118,7 +112,7 @@ async def _serialize_legacy_vpn_access(client: Client) -> dict:
             }
         )
 
-    happ_import_url = await build_happ_import_url(client.happ_subscription_url)
+    happ_import_url = build_happ_import_url(client.happ_subscription_url)
 
     return {
         "access": bool(client.xui_uuid and client.subscription_link),
@@ -284,7 +278,7 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
         )
 
     manual_url = manual_urls[0] if manual_urls else None
-    happ_import_url = await build_happ_import_url(client.happ_subscription_url)
+    happ_import_url = build_happ_import_url(client.happ_subscription_url)
 
     return {
         "access": bool(manual_urls),
