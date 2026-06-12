@@ -15,7 +15,7 @@ from sqlalchemy import select, or_, func
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, SubscriptionHistory, VpnNode
-from services.client_access import create_vpn_access_for_client
+from services.client_access import build_hiddify_import_url, create_vpn_access_for_client
 from services.device_service import DeviceService
 from services.payments import (
     activate_subscription_days_by_client_id,
@@ -69,6 +69,7 @@ def admin_dashboard_keyboard():
 def admin_client_actions_keyboard(client_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="Happ ссылка", callback_data=f"admin_happ:{client_id}")
+    builder.button(text="Hiddify ссылка", callback_data=f"admin_hiddify:{client_id}")
     builder.button(text="Открытая подписка", callback_data=f"admin_plain_sub:{client_id}")
     builder.button(text="VLESS по серверам", callback_data=f"admin_vless:{client_id}")
     builder.button(text="QR", callback_data=f"admin_qr:{client_id}")
@@ -82,7 +83,7 @@ def admin_client_actions_keyboard(client_id: int):
     builder.button(text="Пересоздать доступ", callback_data=f"admin_recreate:{client_id}")
     builder.button(text="История подписок", callback_data=f"admin_history:{client_id}")
     builder.button(text="Отключить", callback_data=f"admin_disable:{client_id}")
-    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -1288,6 +1289,33 @@ async def cb_admin_happ(callback: CallbackQuery):
         f"ID: <code>{client.id}</code>\n"
         f"TG: <code>{client.telegram_id or '—'}</code>\n\n"
         f"<code>{client.happ_subscription_url}</code>",
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_hiddify:"))
+async def cb_admin_hiddify(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+
+    client_id = int(callback.data.split(":", 1)[1])
+    client = await get_client_by_db_id(client_id)
+
+    if client is None or not client.happ_subscription_url:
+        await callback.message.answer("Hiddify ссылка не найдена.")
+        await callback.answer()
+        return
+
+    hiddify_link = build_hiddify_import_url(client.happ_subscription_url) or client.happ_subscription_url
+
+    await callback.message.answer(
+        f"<b>{client.full_name or 'Без имени'}</b>\n"
+        f"ID: <code>{client.id}</code>\n"
+        f"TG: <code>{client.telegram_id or '—'}</code>\n\n"
+        f"<b>Hiddify ссылка:</b>\n"
+        f"<code>{hiddify_link}</code>",
         parse_mode="HTML",
     )
     await callback.answer()

@@ -33,7 +33,7 @@ from services.auth_service import (
     ExpiredLoginCodeError,
     InvalidLoginCodeError,
 )
-from services.client_access import build_happ_import_url
+from services.client_access import build_happ_import_url, build_hiddify_import_url
 from services.device_service import DeviceAccessError, DeviceNotFoundError, DeviceService
 from services.payments import activate_trial_subscription, create_checkout_payment
 from services.subscriptions import get_client_subscription_status, get_expiring_clients
@@ -115,6 +115,7 @@ def access_actions_keyboard(client: Client):
     if has_access:
         if client.happ_subscription_url:
             builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
+            builder.button(text="Подключить в Hiddify", callback_data="show_hiddify_subscription")
         if client.subscription_link:
             builder.button(
                 text="Показать данные для подключения",
@@ -146,6 +147,7 @@ def trial_onboarding_keyboard(client: Client):
     builder = InlineKeyboardBuilder()
     if client.happ_subscription_url:
         builder.button(text="Подключить в Happ", callback_data="show_happ_subscription")
+        builder.button(text="Подключить в Hiddify", callback_data="show_hiddify_subscription")
     if client.subscription_link:
         builder.button(text="Показать QR-код", callback_data="show_vless_qr")
         builder.button(
@@ -768,6 +770,27 @@ async def cb_show_happ_subscription(callback: CallbackQuery):
         "Ссылка для подключения в Happ:\n\n"
         f"<code>{happ_link}</code>\n\n"
         "Откройте Happ и импортируйте эту ссылку как подписку.",
+        parse_mode="HTML",
+        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "show_hiddify_subscription")
+async def cb_show_hiddify_subscription(callback: CallbackQuery):
+    client = await get_client_by_telegram_id(str(callback.from_user.id))
+
+    if client is None or not client.happ_subscription_url:
+        await callback.message.answer("Ссылка для Hiddify пока не подготовлена.")
+        await callback.answer()
+        return
+
+    hiddify_link = build_hiddify_import_url(client.happ_subscription_url) or client.happ_subscription_url
+
+    await callback.message.answer(
+        "Ссылка для подключения в Hiddify:\n\n"
+        f"<code>{hiddify_link}</code>\n\n"
+        "Откройте Hiddify и импортируйте эту ссылку как подписку.",
         parse_mode="HTML",
         reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
     )
