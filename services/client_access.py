@@ -5,6 +5,7 @@ import logging
 import re
 import secrets
 from typing import Optional
+from urllib.parse import quote as url_quote
 
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,6 +45,12 @@ def generate_happ_subscription_token() -> str:
 
 def build_happ_subscription_url(token: str) -> str:
     return f"{APP_BASE_URL}/sub/{token}"
+
+
+def build_hiddify_import_url(subscription_url: str | None) -> str | None:
+    if not subscription_url:
+        return None
+    return f"hiddify://install-sub?url={url_quote(subscription_url, safe='')}"
 
 
 async def build_happ_import_url(plain_subscription_url: str | None) -> str | None:
@@ -121,6 +128,7 @@ async def _serialize_legacy_vpn_access(client: Client) -> dict:
             "type": "xray_vless",
             "subscription_url": client.happ_subscription_url,
             "happ_import_url": happ_import_url or client.happ_subscription_url,
+            "hiddify_import_url": build_hiddify_import_url(client.happ_subscription_url),
             "manual_url": manual_url,
             "manual_urls": [manual_url] if manual_url else [],
             "servers": servers,
@@ -286,6 +294,7 @@ async def _serialize_multi_node_vpn_access(session: AsyncSession, client: Client
             "type": "xray_vless",
             "subscription_url": client.happ_subscription_url,
             "happ_import_url": happ_import_url or client.happ_subscription_url,
+            "hiddify_import_url": build_hiddify_import_url(client.happ_subscription_url),
             "manual_url": manual_url,
             "manual_urls": manual_urls,
             "servers": servers,

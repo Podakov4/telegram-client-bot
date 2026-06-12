@@ -392,6 +392,36 @@ class VLESSManager:
             logger.exception("Ошибка создания клиента в 3x-ui: %s", e)
             return None
 
+    async def _update_single_client(self, inbound_id: int, client_obj: dict) -> bool:
+        client_uuid = client_obj.get("id")
+        if not client_uuid:
+            logger.error("Cannot update client: missing uuid in client_obj")
+            return False
+
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps({"clients": [client_obj]}, ensure_ascii=False),
+        }
+
+        try:
+            url = self._api_url(f"updateClient/{client_uuid}")
+            response = await self.session.post(url, json=payload, timeout=20)
+            logger.info("updateClient/%s status=%s", client_uuid, response.status_code)
+
+            if response.status_code != 200:
+                logger.error("updateClient failed: HTTP %s body=%s", response.status_code, response.text)
+                return False
+
+            data = response.json()
+            if not data.get("success"):
+                logger.error("updateClient error: %s", data.get("msg"))
+                return False
+
+            return True
+        except Exception:
+            logger.exception("Error in _update_single_client uuid=%s", client_uuid)
+            return False
+
     async def update_client(
         self,
         *,
@@ -406,31 +436,17 @@ class VLESSManager:
             logger.error("Клиент в 3x-ui не найден email=%s uuid=%s", email, client_uuid)
             return False
 
-        inbound_id, _, clients = found
-        updated = False
+        inbound_id, client_obj, _ = found
+        updated = dict(client_obj)
 
-        for item in clients:
-            is_match = False
-            if email and item.get("email") == email:
-                is_match = True
-            if client_uuid and item.get("id") == client_uuid:
-                is_match = True
+        if enable is not None:
+            updated["enable"] = enable
+        if expiry_time_ms is not None:
+            updated["expiryTime"] = expiry_time_ms
+        if total_gb is not None:
+            updated["totalGB"] = total_gb * 1024 * 1024 * 1024
 
-            if is_match:
-                if enable is not None:
-                    item["enable"] = enable
-                if expiry_time_ms is not None:
-                    item["expiryTime"] = expiry_time_ms
-                if total_gb is not None:
-                    item["totalGB"] = total_gb * 1024 * 1024 * 1024
-                updated = True
-                break
-
-        if not updated:
-            logger.error("Совпадающий клиент для update не найден email=%s uuid=%s", email, client_uuid)
-            return False
-
-        return await self._save_clients_to_inbound(inbound_id, clients)
+        return await self._update_single_client(inbound_id, updated)
 
     async def disable_client(
         self,

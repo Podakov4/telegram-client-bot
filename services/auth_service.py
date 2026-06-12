@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import secrets
@@ -9,6 +10,7 @@ from typing import Optional
 
 import jwt
 from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import SECRET_KEY
@@ -31,6 +33,7 @@ REFRESH_TOKEN_TTL_DAYS = 30
 LOGIN_CODE_TTL_MINUTES = 5
 EMAIL_LOGIN_CODE_TTL_MINUTES = 10
 EMAIL_LOGIN_CODE_COOLDOWN_SECONDS = 60
+MAX_OTP_ATTEMPTS = 5
 JWT_ALGORITHM = "HS256"
 
 logger = logging.getLogger(__name__)
@@ -137,10 +140,10 @@ class AuthService:
         try:
             payload = jwt.decode(access_token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
         except jwt.PyJWTError as exc:
-            raise InvalidRefreshTokenError("Invalid token") from exc
+            raise AuthError("Invalid token") from exc
 
         if payload.get("type") != "access":
-            raise InvalidRefreshTokenError("Invalid token type")
+            raise AuthError("Invalid token type")
 
         return payload
 
@@ -409,10 +412,9 @@ class AuthService:
     @staticmethod
     async def send_email_login_code(email: str, code: str) -> None:
         try:
-            send_login_code_email(email, code)
+            await asyncio.to_thread(send_login_code_email, email, code)
         except Exception:
             logger.exception("Failed to send email code to %s", email)
-            print(f"[email-auth-fallback] code {code} for {email}")
 
     @staticmethod
     async def _get_or_create_client_by_email(
@@ -442,9 +444,17 @@ class AuthService:
             is_paid=False,
         )
         db.add(client)
-        await db.commit()
-        await db.refresh(client)
-        return client
+        try:
+            await db.commit()
+            await db.refresh(client)
+            return client
+        except IntegrityError:
+            await db.rollback()
+            result = await db.execute(select(Client).where(Client.email == normalized))
+            client = result.scalar_one_or_none()
+            if not client:
+                raise AuthError("Failed to create or find client by email")
+            return client
 
     @staticmethod
     async def merge_clients(
@@ -661,6 +671,11 @@ class AuthService:
             await db.commit()
             raise ExpiredLoginCodeError("Код подтверждения истек")
 
+        if binding_row.attempts >= MAX_OTP_ATTEMPTS:
+            binding_row.consumed_at = now
+            await db.commit()
+            raise InvalidLoginCodeError("Превышен лимит попыток. Запросите новый код.")
+
         expected_hash = AuthService._hash_token(code.strip())
         if binding_row.code_hash != expected_hash:
             binding_row.attempts += 1
@@ -748,6 +763,11 @@ class AuthService:
             login_row.consumed_at = now
             await db.commit()
             raise ExpiredLoginCodeError("Login code expired")
+
+        if login_row.attempts >= MAX_OTP_ATTEMPTS:
+            login_row.consumed_at = now
+            await db.commit()
+            raise InvalidLoginCodeError("Превышен лимит попыток. Запросите новый код.")
 
         expected_hash = AuthService._hash_token(code.strip())
         if login_row.code_hash != expected_hash:

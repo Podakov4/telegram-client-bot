@@ -27,7 +27,7 @@ from services.client_access import (
 )
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.happ_crypto import HappCryptoError, encrypt_happ_subscription_url
-from services.payments import create_checkout_payment_for_client, process_successful_payment
+from services.payments import create_checkout_payment_for_client, process_successful_payment, verify_payment_succeeded
 from services.subscriptions import (
     get_client_subscription_status,
     serialize_subscription_status,
@@ -78,7 +78,7 @@ class LoginByCodePayload(BaseModel):
 
 
 class UpdateProfilePayload(BaseModel):
-    email: Optional[str] = Field(default=None, max_length=255)
+    email: Optional[EmailStr] = Field(default=None)
 
 
 class RefreshPayload(BaseModel):
@@ -459,12 +459,7 @@ async def update_my_profile(
     current_client: Client = Depends(get_current_client),
     db: AsyncSession = Depends(get_db),
 ):
-    email = (payload.email or "").strip()
-
-    if email == "":
-        current_client.email = None
-    else:
-        current_client.email = email.lower()
+    current_client.email = str(payload.email).strip().lower() if payload.email else None
 
     try:
         await db.commit()
@@ -609,6 +604,7 @@ async def get_vpn_subscription_url(
         "ok": True,
         "subscription_url": vpn.get("subscription_url"),
         "happ_import_url": vpn.get("happ_import_url"),
+        "hiddify_import_url": vpn.get("hiddify_import_url"),
         "manual_url": vpn.get("manual_url"),
         "manual_urls": vpn.get("manual_urls", []),
         "servers": vpn.get("servers", []),
@@ -631,6 +627,9 @@ async def yookassa_webhook(request: Request):
     status_value = obj.get("status")
 
     if event != "payment.succeeded" or not payment_id or status_value != "succeeded":
+        return {"ok": True}
+
+    if not await verify_payment_succeeded(payment_id):
         return {"ok": True}
 
     ok, _ = await process_successful_payment(payment_id)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sa_update
 
 from config import (
     YOOKASSA_AMOUNT_1_MONTH,
@@ -20,6 +21,8 @@ from services.yookassa import (
     create_payment as yk_create_payment,
     get_payment as yk_get_payment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_MAX_DEVICES_BY_MONTHS = {
@@ -453,7 +456,7 @@ async def create_checkout_payment_for_client(
 
     payment_id = payment["id"]
     confirmation_url = payment["confirmation"]["confirmation_url"]
-    print("YooKassa confirmation_url:", confirmation_url)
+    logger.info("YooKassa confirmation_url: %s", confirmation_url)
     status_value = payment["status"]
 
     async with AsyncSessionLocal() as session:
@@ -484,22 +487,53 @@ async def create_checkout_payment(telegram_id: str, full_name: str | None, month
     )
 
 
+async def verify_payment_succeeded(payment_id: str) -> bool:
+    try:
+        payment = await yk_get_payment(payment_id)
+        return payment.get("status") == "succeeded"
+    except Exception:
+        return False
+
+
 async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
     bonus_referrer_client_id: int | None = None
+
+    # Atomically claim the payment: UPDATE WHERE is_processed=False.
+    # SQLite serializes writes, so exactly one concurrent caller gets rowcount=1.
+    async with AsyncSessionLocal() as claim_session:
+        claim_result = await claim_session.execute(
+            sa_update(YooKassaPayment)
+            .where(
+                YooKassaPayment.external_payment_id == payment_id,
+                YooKassaPayment.is_processed == False,
+            )
+            .values(is_processed=True)
+            .execution_options(synchronize_session=False)
+        )
+        await claim_session.commit()
+
+    if claim_result.rowcount == 0:
+        async with AsyncSessionLocal() as check_session:
+            exists = await check_session.execute(
+                select(YooKassaPayment).where(
+                    YooKassaPayment.external_payment_id == payment_id
+                )
+            )
+            existing = exists.scalar_one_or_none()
+        if existing is None:
+            return False, "Платеж не найден."
+        return True, "Этот платеж уже был обработан раньше."
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(YooKassaPayment).where(
-                YooKassaPayment.external_payment_id == payment_id,
+                YooKassaPayment.external_payment_id == payment_id
             )
         )
         row = result.scalar_one_or_none()
 
         if row is None:
             return False, "Платеж не найден."
-
-        if row.is_processed:
-            return True, "Этот платеж уже был обработан раньше."
 
         target_client_id = row.client_id
         if target_client_id is None and row.telegram_id:
@@ -520,6 +554,14 @@ async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
             ok = False
 
         if not ok:
+            # Revert the claim so the webhook can be retried
+            await session.execute(
+                sa_update(YooKassaPayment)
+                .where(YooKassaPayment.external_payment_id == payment_id)
+                .values(is_processed=False)
+                .execution_options(synchronize_session=False)
+            )
+            await session.commit()
             return False, "Оплата прошла, но не удалось активировать подписку."
 
         processed_at = datetime.utcnow()
@@ -530,7 +572,6 @@ async def process_successful_payment(payment_id: str) -> tuple[bool, str]:
         )
 
         row.status = "succeeded"
-        row.is_processed = True
         row.processed_at = processed_at
         row.updated_at = processed_at
         await session.commit()
