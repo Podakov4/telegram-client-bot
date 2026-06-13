@@ -25,6 +25,7 @@ from services.client_access import (
     build_happ_import_url,
     get_client_subscription_links_by_client_id,
     get_client_vpn_access_by_client_id,
+    is_client_subscription_active,
 )
 from services.device_service import DeviceNotFoundError, DeviceService
 from services.payments import create_checkout_payment_for_client, process_successful_payment, verify_payment_succeeded
@@ -222,9 +223,12 @@ async def get_subscription(token: str):
         if client is None:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
-        links = await get_client_subscription_links_by_client_id(client.id)
-        if not links:
-            raise HTTPException(status_code=404, detail="Access data not found")
+        # Do not serve VPN configs to clients whose subscription has expired:
+        # an inactive subscription must yield no usable links.
+        if not is_client_subscription_active(client):
+            links = []
+        else:
+            links = await get_client_subscription_links_by_client_id(client.id)
 
         body = build_happ_subscription_body(links)
 

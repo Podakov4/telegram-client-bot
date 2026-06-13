@@ -9,4 +9,4 @@ logs/*
 clients.db
 data/
 database/*.db
-database/*.bak
+database/*.bakdatabase.tar.gz

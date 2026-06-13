@@ -1,13 +1,18 @@
 import asyncio
 import logging
+import sys
+from pathlib import Path
 
-from aiogram import Bot
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+BASE_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BASE_DIR))
 
-import config
-from services.subscriptions import (
+from aiogram import Bot  # noqa: E402
+from aiogram.client.default import DefaultBotProperties  # noqa: E402
+from aiogram.enums import ParseMode  # noqa: E402
+from aiogram.utils.keyboard import InlineKeyboardBuilder  # noqa: E402
+
+import config  # noqa: E402
+from services.subscriptions import (  # noqa: E402
     get_expiring_clients_for_notice,
     get_expired_clients_for_notice,
     mark_expiring_notice_sent,

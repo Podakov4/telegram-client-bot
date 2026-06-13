@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
-from database.models import Client, Plan
+from database.models import Client, ClientVpnAccess, Plan
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -141,29 +144,72 @@ async def mark_expired_notice_sent(client_id: int) -> None:
 
 
 async def disable_expired_subscriptions() -> int:
+    # Imported lazily to avoid a circular import (client_access -> subscriptions).
+    from services.client_access import (
+        disable_vpn_access_for_client_id,
+        is_client_subscription_active,
+    )
+
     now = _utcnow()
 
     async with AsyncSessionLocal() as session:
+        # Candidates = clients whose subscription looks expired, OR who still hold
+        # an enabled VPN access row. The second condition is what makes this
+        # self-healing: it also catches clients that were flagged inactive in the
+        # past but whose VPN access was never actually revoked on the nodes.
         result = await session.execute(
-            select(Client).where(
-                Client.is_active == True,
-                Client.paid_until.is_not(None),
-                Client.paid_until <= now,
+            select(Client.id)
+            .outerjoin(ClientVpnAccess, ClientVpnAccess.client_id == Client.id)
+            .where(
+                or_(
+                    and_(
+                        Client.is_active == True,
+                        Client.paid_until.is_not(None),
+                        Client.paid_until <= now,
+                    ),
+                    ClientVpnAccess.is_enabled == True,
+                )
             )
+            .distinct()
         )
-        clients = list(result.scalars().all())
+        candidate_ids = [row[0] for row in result.all()]
 
-        count = 0
-        for client in clients:
+    count = 0
+    for client_id in candidate_ids:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Client).where(Client.id == client_id)
+            )
+            client = result.scalar_one_or_none()
+            if client is None:
+                continue
+            # Paid-and-active clients keep their access untouched.
+            if is_client_subscription_active(client):
+                continue
+
+        # Revoke real VPN access on every node before flipping DB flags, so an
+        # expired client can no longer use the VPN.
+        try:
+            await disable_vpn_access_for_client_id(client_id)
+        except Exception:
+            logger.exception(
+                "Failed to disable VPN access for expired client_id=%s", client_id
+            )
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Client).where(Client.id == client_id)
+            )
+            client = result.scalar_one_or_none()
+            if client is None:
+                continue
             client.is_active = False
             client.is_paid = False
-            client.updated_at = now
+            client.updated_at = _utcnow()
+            await session.commit()
             count += 1
 
-        if count:
-            await session.commit()
-
-        return count
+    return count
 
 
 async def is_subscription_active(client: Client) -> bool:
