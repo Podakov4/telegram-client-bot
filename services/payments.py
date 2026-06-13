@@ -16,7 +16,10 @@ from database.models import Client, SubscriptionHistory, YooKassaPayment
 from services.client_access import (
     create_vpn_access_for_client_id,
     disable_vpn_access_for_client_id,
+    get_client_by_id as _get_client_by_id,
+    get_client_by_telegram_id as _get_client_by_telegram_id,
 )
+from utils.notes import dump_notes, parse_notes, upsert_note
 from services.yookassa import (
     create_payment as yk_create_payment,
     get_payment as yk_get_payment,
@@ -65,47 +68,6 @@ def build_receipt_item_name(months: int) -> str:
 def get_default_max_devices_for_months(months: int) -> int:
     return DEFAULT_MAX_DEVICES_BY_MONTHS.get(months, 1)
 
-
-def parse_notes_to_dict(notes: Optional[str]) -> dict[str, str]:
-    result: dict[str, str] = {}
-    if not notes:
-        return result
-
-    for line in notes.splitlines():
-        raw = line.strip()
-        if not raw or "=" not in raw:
-            continue
-        key, value = raw.split("=", 1)
-        result[key.strip()] = value.strip()
-
-    return result
-
-
-def dump_notes_from_dict(data: dict[str, str]) -> str:
-    lines = [f"{key}={value}" for key, value in data.items()]
-    return "\n".join(lines)
-
-
-def upsert_note_value(notes: Optional[str], key: str, value: str) -> str:
-    data = parse_notes_to_dict(notes)
-    data[key] = value
-    return dump_notes_from_dict(data)
-
-
-async def _get_client_by_id(client_id: int) -> Client | None:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
-        return result.scalar_one_or_none()
-
-
-async def _get_client_by_telegram_id(telegram_id: str) -> Client | None:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        return result.scalar_one_or_none()
 
 
 async def grant_referral_bonus_if_eligible(
@@ -208,8 +170,8 @@ async def activate_subscription_by_client_id(
         client.last_expiring_notice_at = None
         client.last_expired_notice_at = None
 
-        client.notes = upsert_note_value(client.notes, "plan_code", f"{months}m")
-        client.notes = upsert_note_value(client.notes, "max_devices", str(resolved_max_devices))
+        client.notes = upsert_note(client.notes, "plan_code", f"{months}m")
+        client.notes = upsert_note(client.notes, "max_devices", str(resolved_max_devices))
 
         history = SubscriptionHistory(
             client_id=client.id,
@@ -264,7 +226,7 @@ async def activate_subscription_days_by_client_id(
             return False
 
         now = datetime.utcnow()
-        notes_map = parse_notes_to_dict(client.notes)
+        notes_map = parse_notes(client.notes)
 
         resolved_max_devices = max_devices
         if resolved_max_devices is None:
@@ -293,7 +255,7 @@ async def activate_subscription_days_by_client_id(
 
         notes_map["plan_code"] = resolved_plan_code
         notes_map["max_devices"] = str(resolved_max_devices)
-        client.notes = dump_notes_from_dict(notes_map)
+        client.notes = dump_notes(notes_map)
 
         history = SubscriptionHistory(
             client_id=client.id,
@@ -348,7 +310,7 @@ async def activate_trial_subscription_by_client_id(
         if client is None:
             return False, "Клиент не найден."
 
-        notes_map = parse_notes_to_dict(client.notes)
+        notes_map = parse_notes(client.notes)
         if notes_map.get("trial_used") == "true":
             return False, "Пробный период уже был использован."
 
@@ -367,7 +329,7 @@ async def activate_trial_subscription_by_client_id(
         notes_map["trial_used"] = "true"
         notes_map["plan_code"] = f"trial_{days}d"
         notes_map["max_devices"] = str(max_devices)
-        client.notes = dump_notes_from_dict(notes_map)
+        client.notes = dump_notes(notes_map)
 
         history = SubscriptionHistory(
             client_id=client.id,

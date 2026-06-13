@@ -15,7 +15,12 @@ from sqlalchemy import select, or_, func
 from config import ADMIN_IDS
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, SubscriptionHistory, VpnNode
-from services.client_access import build_hiddify_import_url, create_vpn_access_for_client
+from services.client_access import (
+    build_hiddify_import_url,
+    create_vpn_access_for_client,
+    get_client_by_id,
+)
+from utils.notes import get_note_int as _get_note_int
 from services.device_service import DeviceService
 from services.payments import (
     activate_subscription_days_by_client_id,
@@ -87,15 +92,6 @@ def admin_client_actions_keyboard(client_id: int):
     return builder.as_markup()
 
 
-def admin_search_results_keyboard(clients: list[Client]):
-    builder = InlineKeyboardBuilder()
-    for client in clients:
-        title = f"{client.full_name or 'Без имени'} | tg:{client.telegram_id}"
-        builder.button(text=title[:64], callback_data=f"admin_open:{client.id}")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
 def clients_list_keyboard(clients: list[Client]):
     builder = InlineKeyboardBuilder()
     for client in clients:
@@ -103,6 +99,9 @@ def clients_list_keyboard(clients: list[Client]):
         builder.button(text=title[:64], callback_data=f"admin_open:{client.id}")
     builder.adjust(1)
     return builder.as_markup()
+
+
+admin_search_results_keyboard = clients_list_keyboard
 
 
 def renewal_keyboard():
@@ -204,11 +203,6 @@ def format_history_rows(history_rows: list[SubscriptionHistory]) -> str:
     return "\n\n".join(lines)
 
 
-async def get_client_by_db_id(client_id: int):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(select(Client).where(Client.id == client_id))
-        return result.scalar_one_or_none()
-
 
 def parse_client_notes(notes: str | None) -> tuple[dict[str, str], list[str]]:
     data: dict[str, str] = {}
@@ -236,23 +230,8 @@ def dump_client_notes(data: dict[str, str], raw_lines: list[str]) -> str | None:
     return "\n".join(lines) if lines else None
 
 
-def get_note_int(notes: str | None, key: str, default: int) -> int:
-    data, _ = parse_client_notes(notes)
-    value = data.get(key)
-
-    if not value:
-        return default
-
-    try:
-        parsed = int(value)
-    except ValueError:
-        return default
-
-    return parsed if parsed > 0 else default
-
-
 def get_client_device_limit_from_notes(client: Client) -> int:
-    return get_note_int(client.notes, "max_devices", DEFAULT_DEVICE_LIMIT)
+    return _get_note_int(client.notes, "max_devices", DEFAULT_DEVICE_LIMIT)
 
 
 async def get_client_device_limit_state(client_id: int):
@@ -897,7 +876,7 @@ async def process_admin_grant_days(message: Message, state: FSMContext):
         await message.answer("Не удалось выдать доступ на указанное количество дней.")
         return
 
-    updated = await get_client_by_db_id(int(client_id))
+    updated = await get_client_by_id(int(client_id))
     await message.answer(
         f"Доступ выдан на <b>{days}</b> дн.\n\n{format_client_card(updated)}",
         reply_markup=admin_client_actions_keyboard(updated.id),
@@ -995,7 +974,7 @@ async def process_admin_message_to_client(message: Message, state: FSMContext, b
         await message.answer("Сессия отправки сообщения устарела. Откройте клиента заново.")
         return
 
-    client = await get_client_by_db_id(int(client_id))
+    client = await get_client_by_id(int(client_id))
     if client is None:
         await state.clear()
         await message.answer("Клиент не найден.")
@@ -1233,7 +1212,7 @@ async def cb_admin_open(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":")[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if not client:
         await callback.message.answer("Клиент не найден.")
@@ -1254,7 +1233,7 @@ async def cb_admin_history(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":")[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if not client:
         await callback.message.answer("Клиент не найден.")
@@ -1277,7 +1256,7 @@ async def cb_admin_happ(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None or not client.happ_subscription_url:
         await callback.message.answer("Happ ссылка не найдена.")
@@ -1301,7 +1280,7 @@ async def cb_admin_hiddify(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None or not client.happ_subscription_url:
         await callback.message.answer("Hiddify ссылка не найдена.")
@@ -1328,7 +1307,7 @@ async def cb_admin_plain_sub(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1349,7 +1328,7 @@ async def cb_admin_all_links(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1372,7 +1351,7 @@ async def cb_admin_vless(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1395,7 +1374,7 @@ async def cb_admin_qr(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None or not client.subscription_link:
         await callback.message.answer("Ссылка подключения не найдена.")
@@ -1431,7 +1410,7 @@ async def cb_admin_copy_all(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1452,7 +1431,7 @@ async def cb_admin_resend_access(callback: CallbackQuery, bot: Bot):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1481,7 +1460,7 @@ async def cb_admin_send_instructions(callback: CallbackQuery, bot: Bot):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1535,7 +1514,7 @@ async def cb_admin_write_client(callback: CallbackQuery, state: FSMContext):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
 
     if client is None:
         await callback.message.answer("Клиент не найден.")
@@ -1575,7 +1554,7 @@ async def cb_admin_grant_days(callback: CallbackQuery, state: FSMContext):
         return
 
     client_id = int(callback.data.split(":", 1)[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
     if not client:
         await callback.message.answer("Клиент не найден.")
         await callback.answer()
@@ -1604,7 +1583,7 @@ async def cb_admin_recreate(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":")[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
     if not client:
         await callback.message.answer("Клиент не найден.")
         await callback.answer()
@@ -1628,7 +1607,7 @@ async def cb_admin_recreate(callback: CallbackQuery):
         await callback.answer()
         return
 
-    updated = await get_client_by_db_id(client_id)
+    updated = await get_client_by_id(client_id)
     await callback.message.answer(
         f"Доступ пересоздан.\n\n{format_client_card(updated)}",
         reply_markup=admin_client_actions_keyboard(updated.id),
@@ -1643,7 +1622,7 @@ async def cb_admin_disable(callback: CallbackQuery):
         return
 
     client_id = int(callback.data.split(":")[1])
-    client = await get_client_by_db_id(client_id)
+    client = await get_client_by_id(client_id)
     if not client:
         await callback.message.answer("Клиент не найден.")
         await callback.answer()
@@ -1655,7 +1634,7 @@ async def cb_admin_disable(callback: CallbackQuery):
         await callback.answer()
         return
 
-    updated = await get_client_by_db_id(client_id)
+    updated = await get_client_by_id(client_id)
     await callback.message.answer(
         f"Подписка отключена.\n\n{format_client_card(updated)}",
         reply_markup=admin_client_actions_keyboard(updated.id),

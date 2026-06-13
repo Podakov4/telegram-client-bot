@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, Plan
+from utils.notes import get_note_int
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +34,6 @@ class SubscriptionError(Exception):
 def _utcnow() -> datetime:
     return datetime.utcnow()
 
-
-def _extract_max_devices_from_notes(notes: Optional[str]) -> Optional[int]:
-    if not notes:
-        return None
-
-    for line in notes.splitlines():
-        raw = line.strip()
-        if raw.lower().startswith("max_devices="):
-            _, value = raw.split("=", 1)
-            try:
-                parsed = int(value.strip())
-                if parsed > 0:
-                    return parsed
-            except ValueError:
-                return None
-
-    return None
 
 
 async def get_expiring_clients(days: int = 3) -> list[Client]:
@@ -228,21 +212,6 @@ async def is_subscription_active(client: Client) -> bool:
     return client.paid_until > _utcnow()
 
 
-async def get_client_by_id(client_id: int) -> Optional[Client]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.id == client_id)
-        )
-        return result.scalar_one_or_none()
-
-
-async def get_client_by_telegram_id(telegram_id: str) -> Optional[Client]:
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == str(telegram_id))
-        )
-        return result.scalar_one_or_none()
-
 
 async def get_plan_by_code(session: AsyncSession, plan_code: str) -> Optional[Plan]:
     result = await session.execute(
@@ -259,7 +228,7 @@ async def get_max_devices_for_client(
     db: Optional[AsyncSession] = None,
     default_max_devices: int = 3,
 ) -> int:
-    notes_value = _extract_max_devices_from_notes(client.notes)
+    notes_value = get_note_int(client.notes, "max_devices", 0) or None
     if notes_value:
         return notes_value
 

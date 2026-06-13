@@ -1,40 +1,12 @@
-from datetime import datetime
-
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message
-from sqlalchemy import select
 
-from database.db import AsyncSessionLocal
-from database.models import Client
+from handlers.common import client_has_active_access, client_has_trial_used
 from keyboards.reply import main_reply_keyboard
+from services.client_access import get_client_by_telegram_id
 
 router = Router()
-
-
-def client_has_trial_used(client: Client | None) -> bool:
-    return bool(client and client.notes and "trial_used=true" in client.notes)
-
-
-def client_has_active_access(client: Client | None) -> bool:
-    if client is None:
-        return False
-
-    if client.is_active and client.subscription_link:
-        return True
-
-    if client.paid_until and client.paid_until > datetime.utcnow() and client.subscription_link:
-        return True
-
-    return False
-
-
-async def get_client_by_telegram_id(telegram_id: str):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        return result.scalar_one_or_none()
 
 
 @router.message(Command("menu"))

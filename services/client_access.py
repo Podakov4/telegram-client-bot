@@ -15,6 +15,7 @@ from config import APP_BASE_URL
 from database.db import AsyncSessionLocal
 from database.models import Client, ClientVpnAccess, VpnNode
 from services.vless import DEFAULT_NODE_CONFIG, NodeConfig, VLESSManager
+from utils.notes import get_note_int
 
 logger = logging.getLogger(__name__)
 
@@ -415,20 +416,6 @@ async def _update_existing_access_for_node(
     return False
 
 
-def _get_limit_ip_for_client(client: Client, default: int = 3) -> int:
-    if client.notes:
-        for line in client.notes.splitlines():
-            raw = line.strip()
-            if raw.lower().startswith("max_devices="):
-                _, value = raw.split("=", 1)
-                try:
-                    parsed = int(value.strip())
-                    if parsed > 0:
-                        return parsed
-                except ValueError:
-                    pass
-    return default
-
 
 async def _ensure_access_for_node(
     session: AsyncSession,
@@ -443,7 +430,7 @@ async def _ensure_access_for_node(
     paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
     xui_email = access.xui_email or client.login or make_xui_email(client)
     external_identity = client.telegram_id or f"client_{client.id}"
-    limit_ip = _get_limit_ip_for_client(client)
+    limit_ip = get_note_int(client.notes, "max_devices", 3)
 
     if access.xui_email or access.xui_uuid:
         try:

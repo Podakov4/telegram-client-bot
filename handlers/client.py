@@ -25,6 +25,7 @@ from config import (
 )
 from database.db import AsyncSessionLocal
 from database.models import Client
+from handlers.common import REFERRAL_BONUS_DAYS, client_has_active_access, client_has_trial_used
 from handlers.instructions import instructions_keyboard
 from keyboards.reply import main_reply_keyboard
 from services.auth_service import (
@@ -33,7 +34,11 @@ from services.auth_service import (
     ExpiredLoginCodeError,
     InvalidLoginCodeError,
 )
-from services.client_access import build_happ_import_url, build_hiddify_import_url
+from services.client_access import (
+    build_happ_import_url,
+    build_hiddify_import_url,
+    get_client_by_telegram_id,
+)
 from services.device_service import DeviceAccessError, DeviceNotFoundError, DeviceService
 from services.payments import activate_trial_subscription, create_checkout_payment
 from services.subscriptions import get_client_subscription_status, get_expiring_clients
@@ -41,29 +46,11 @@ from services.subscriptions import get_client_subscription_status, get_expiring_
 router = Router()
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-REFERRAL_BONUS_DAYS = 20
 
 
 class EmailBindingStates(StatesGroup):
     waiting_for_email = State()
     waiting_for_code = State()
-
-
-def client_has_trial_used(client: Client | None) -> bool:
-    return bool(client and client.notes and "trial_used=true" in client.notes)
-
-
-def client_has_active_access(client: Client | None) -> bool:
-    if client is None:
-        return False
-
-    if client.is_active and client.subscription_link:
-        return True
-
-    if client.paid_until and client.paid_until > datetime.utcnow() and client.subscription_link:
-        return True
-
-    return False
 
 
 def build_reply_keyboard_for_client(client: Client | None, user_id: int):
@@ -325,13 +312,6 @@ async def get_referral_stats(client_id: int) -> tuple[int, int, list[Client]]:
 
     return invited_count or 0, rewarded_count or 0, recent_referrals
 
-
-async def get_client_by_telegram_id(telegram_id: str):
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(Client).where(Client.telegram_id == telegram_id)
-        )
-        return result.scalar_one_or_none()
 
 
 async def send_access_message(message: Message, client: Client):
@@ -878,40 +858,24 @@ async def cb_open_instructions_from_access(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data == "app_login_code_any")
-async def cb_app_login_code_any(callback: CallbackQuery):
-    await send_app_login_code_message(callback, platform="any")
+@router.callback_query(F.data.startswith("app_login_code_"))
+async def cb_app_login_code(callback: CallbackQuery):
+    platform = callback.data.removeprefix("app_login_code_")
+    await send_app_login_code_message(callback, platform=platform)
 
 
-@router.callback_query(F.data == "app_login_code_android")
-async def cb_app_login_code_android(callback: CallbackQuery):
-    await send_app_login_code_message(callback, platform="android")
-
-
-@router.callback_query(F.data == "app_login_code_ios")
-async def cb_app_login_code_ios(callback: CallbackQuery):
-    await send_app_login_code_message(callback, platform="ios")
-
-
-@router.callback_query(F.data == "app_login_code_windows")
-async def cb_app_login_code_windows(callback: CallbackQuery):
-    await send_app_login_code_message(callback, platform="windows")
-
-
-@router.callback_query(F.data == "app_login_code_macos")
-async def cb_app_login_code_macos(callback: CallbackQuery):
-    await send_app_login_code_message(callback, platform="macos")
-
-
-async def activate_trial_and_respond(message: Message):
-    ok, text = await activate_trial_subscription(str(message.from_user.id), days=7)
-
-    client = await get_client_by_telegram_id(str(message.from_user.id))
+async def _respond_to_trial_activation(
+    message: Message,
+    telegram_id: str,
+    user_id: int,
+) -> None:
+    ok, text = await activate_trial_subscription(telegram_id, days=7)
+    client = await get_client_by_telegram_id(telegram_id)
 
     if not ok:
         await message.answer(
             text,
-            reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+            reply_markup=build_reply_keyboard_for_client(client, user_id),
         )
         return
 
@@ -922,7 +886,7 @@ async def activate_trial_and_respond(message: Message):
         "2. Подключите доступ\n"
         "3. Проверьте, что все работает\n\n"
         "Ниже — самые быстрые действия для старта.",
-        reply_markup=build_reply_keyboard_for_client(client, message.from_user.id),
+        reply_markup=build_reply_keyboard_for_client(client, user_id),
     )
 
     if client and (client.subscription_link or client.happ_subscription_url):
@@ -930,6 +894,14 @@ async def activate_trial_and_respond(message: Message):
             "Доступ подготовлен. Выберите удобный способ подключения.",
             reply_markup=trial_onboarding_keyboard(client),
         )
+
+
+async def activate_trial_and_respond(message: Message):
+    await _respond_to_trial_activation(
+        message,
+        telegram_id=str(message.from_user.id),
+        user_id=message.from_user.id,
+    )
 
 
 
@@ -974,35 +946,11 @@ async def trial_period(message: Message):
 
 @router.callback_query(F.data == "activate_trial")
 async def cb_activate_trial(callback: CallbackQuery):
-    message = callback.message
-    ok, text = await activate_trial_subscription(str(callback.from_user.id), days=7)
-
-    client = await get_client_by_telegram_id(str(callback.from_user.id))
-
-    if not ok:
-        await message.answer(
-            text,
-            reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
-        )
-        await callback.answer()
-        return
-
-    await message.answer(
-        "<b>Пробный доступ активирован на 7 дней.</b>\n\n"
-        "Теперь:\n"
-        "1. Скачайте приложение для своего устройства\n"
-        "2. Подключите доступ\n"
-        "3. Проверьте, что все работает\n\n"
-        "Ниже — самые быстрые действия для старта.",
-        reply_markup=build_reply_keyboard_for_client(client, callback.from_user.id),
+    await _respond_to_trial_activation(
+        callback.message,
+        telegram_id=str(callback.from_user.id),
+        user_id=callback.from_user.id,
     )
-
-    if client and (client.subscription_link or client.happ_subscription_url):
-        await message.answer(
-            "Доступ подготовлен. Выберите удобный способ подключения.",
-            reply_markup=trial_onboarding_keyboard(client),
-        )
-
     await callback.answer()
 
 
