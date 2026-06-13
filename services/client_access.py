@@ -233,7 +233,12 @@ async def _collect_subscription_links(session: AsyncSession, client: Client) -> 
     if links:
         return links
 
-    if client.subscription_link:
+    # Only fall back to the legacy single-node link if the client has NO
+    # ClientVpnAccess rows at all (pre-multi-node clients). When rows exist
+    # but are all disabled, the subscription is genuinely inactive on every
+    # node — returning a stale link would let a disabled client through.
+    has_any_access = bool(await _load_client_access_pairs(session, client.id))
+    if not has_any_access and client.subscription_link:
         return [client.subscription_link.strip()]
 
     return []
@@ -423,18 +428,34 @@ async def _ensure_access_for_node(
     external_identity = client.telegram_id or f"client_{client.id}"
 
     if access.xui_email or access.xui_uuid:
-        synced = await _update_existing_access_for_node(session, client, node, access)
+        try:
+            synced = await _update_existing_access_for_node(session, client, node, access)
+        except Exception:
+            logger.exception(
+                "Unexpected error updating existing access for client_id=%s node=%s",
+                client.id,
+                node.code,
+            )
+            synced = False
         if synced:
             return True
 
-    async with VLESSManager(node_config=build_node_config(node)) as manager:
-        created = await manager.add_client(
-            telegram_id=external_identity,
-            full_name=client.full_name or client.email or xui_email,
-            xui_email=xui_email,
-            paid_until_ts_ms=paid_until_ts_ms,
-            total_gb=0,
+    try:
+        async with VLESSManager(node_config=build_node_config(node)) as manager:
+            created = await manager.add_client(
+                telegram_id=external_identity,
+                full_name=client.full_name or client.email or xui_email,
+                xui_email=xui_email,
+                paid_until_ts_ms=paid_until_ts_ms,
+                total_gb=0,
+            )
+    except Exception:
+        logger.exception(
+            "Unexpected error creating client access for client_id=%s node=%s",
+            client.id,
+            node.code,
         )
+        return False
 
     if not created:
         logger.error(
@@ -484,7 +505,15 @@ async def create_vpn_access_for_client_id(client_id: int) -> bool:
 
         ok = True
         for node in nodes:
-            node_ok = await _ensure_access_for_node(session, client, node)
+            try:
+                node_ok = await _ensure_access_for_node(session, client, node)
+            except Exception:
+                logger.exception(
+                    "Unhandled error in _ensure_access_for_node for client_id=%s node=%s",
+                    client_id,
+                    node.code,
+                )
+                node_ok = False
             ok = ok and node_ok
 
         await _sync_legacy_fields(session, client)
