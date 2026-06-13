@@ -322,6 +322,7 @@ class VLESSManager:
         xui_email: str,
         paid_until_ts_ms: int = 0,
         total_gb: int = 0,
+        limit_ip: int = 0,
     ) -> tuple[str, str, str] | None:
         if not await self.login():
             return None
@@ -340,6 +341,7 @@ class VLESSManager:
                 enable=True,
                 expiry_time_ms=paid_until_ts_ms,
                 total_gb=total_gb,
+                limit_ip=limit_ip,
             )
 
             link = self.build_vless_link(client_obj["id"])
@@ -355,7 +357,7 @@ class VLESSManager:
                     "enable": True,
                     "expiryTime": paid_until_ts_ms,
                     "flow": "",
-                    "limitIp": 0,
+                    "limitIp": limit_ip,
                     "totalGB": total_gb * 1024 * 1024 * 1024,
                     "tgId": telegram_id,
                     "subId": "",
@@ -430,6 +432,7 @@ class VLESSManager:
         enable: bool | None = None,
         expiry_time_ms: int | None = None,
         total_gb: int | None = None,
+        limit_ip: int | None = None,
     ) -> bool:
         found = await self.find_client(email=email, client_uuid=client_uuid)
         if not found:
@@ -445,6 +448,8 @@ class VLESSManager:
             updated["expiryTime"] = expiry_time_ms
         if total_gb is not None:
             updated["totalGB"] = total_gb * 1024 * 1024 * 1024
+        if limit_ip is not None:
+            updated["limitIp"] = limit_ip
 
         return await self._update_single_client(inbound_id, updated)
 
@@ -467,6 +472,7 @@ class VLESSManager:
         client_uuid: str | None = None,
         expiry_time_ms: int | None = None,
         total_gb: int | None = None,
+        limit_ip: int | None = None,
     ) -> bool:
         return await self.update_client(
             email=email,
@@ -474,6 +480,7 @@ class VLESSManager:
             enable=True,
             expiry_time_ms=expiry_time_ms,
             total_gb=total_gb,
+            limit_ip=limit_ip,
         )
 
     async def get_client_link(

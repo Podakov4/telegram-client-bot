@@ -369,6 +369,7 @@ async def _update_existing_access_for_node(
     client: Client,
     node: VpnNode,
     access: ClientVpnAccess,
+    limit_ip: int = 0,
 ) -> bool:
     if not client.paid_until:
         logger.warning("Cannot update access: paid_until is empty for client_id=%s", client.id)
@@ -386,6 +387,7 @@ async def _update_existing_access_for_node(
                 client_uuid=access.xui_uuid,
                 expiry_time_ms=paid_until_ts_ms,
                 total_gb=0,
+                limit_ip=limit_ip,
             )
         except TypeError:
             logger.exception("enable_client signature mismatch")
@@ -413,6 +415,21 @@ async def _update_existing_access_for_node(
     return False
 
 
+def _get_limit_ip_for_client(client: Client, default: int = 3) -> int:
+    if client.notes:
+        for line in client.notes.splitlines():
+            raw = line.strip()
+            if raw.lower().startswith("max_devices="):
+                _, value = raw.split("=", 1)
+                try:
+                    parsed = int(value.strip())
+                    if parsed > 0:
+                        return parsed
+                except ValueError:
+                    pass
+    return default
+
+
 async def _ensure_access_for_node(
     session: AsyncSession,
     client: Client,
@@ -426,10 +443,11 @@ async def _ensure_access_for_node(
     paid_until_ts_ms = int(client.paid_until.timestamp() * 1000)
     xui_email = access.xui_email or client.login or make_xui_email(client)
     external_identity = client.telegram_id or f"client_{client.id}"
+    limit_ip = _get_limit_ip_for_client(client)
 
     if access.xui_email or access.xui_uuid:
         try:
-            synced = await _update_existing_access_for_node(session, client, node, access)
+            synced = await _update_existing_access_for_node(session, client, node, access, limit_ip=limit_ip)
         except Exception:
             logger.exception(
                 "Unexpected error updating existing access for client_id=%s node=%s",
@@ -448,6 +466,7 @@ async def _ensure_access_for_node(
                 xui_email=xui_email,
                 paid_until_ts_ms=paid_until_ts_ms,
                 total_gb=0,
+                limit_ip=limit_ip,
             )
     except Exception:
         logger.exception(
